@@ -1,0 +1,241 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: port-detector
+  namespace: workspace-system
+data:
+  port-detector.sh: |
+    #!/bin/bash
+
+    # Enable detailed debugging
+    set -x
+    
+    NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+    WORKSPACE_DOMAIN="SUBDOMAIN_REPLACE_ME"
+
+    echo "Waiting for services to initialise..."
+    sleep 30
+    
+    # Install required tools if missing
+    echo "Installing required tools..."
+    apt-get update && apt-get install -y net-tools curl apt-transport-https gnupg jq lsof iproute2
+    
+    # Install kubectl if missing
+    if ! command -v kubectl &> /dev/null; then
+      echo "Installing kubectl..."
+      curl -LO "https://dl.k8s.io/release/v1.26.0/bin/linux/amd64/kubectl"
+      chmod +x kubectl
+      mv kubectl /usr/local/bin/
+    fi
+    
+    # Get subdomain from the workspace info configmap
+    echo "Fetching workspace info..."
+    CM_DATA=$(kubectl get configmap -n $NAMESPACE workspace-info -o jsonpath='{.data.info}' 2>/dev/null)
+    if [ -n "$CM_DATA" ]; then
+      SUBDOMAIN=$(echo "$CM_DATA" | jq -r '.subdomain // ""')
+      echo "Found subdomain: $SUBDOMAIN"
+    else
+      echo "Warning: Could not find workspace info ConfigMap"
+    fi
+    
+    echo "Tools installed. Starting port detection..."
+    
+    # Test kubectl functionality
+    kubectl version --client
+    echo "Testing kubectl namespace access..."
+    kubectl get namespace $NAMESPACE
+    
+    # Function to create ingress for a port
+    function create_ingress() {
+        local PORT=$1
+
+        CERT_EXISTS=$(kubectl get secret -n $NAMESPACE workspace-domain-wildcard-tls 2>/dev/null)
+    
+        if [ -z "$CERT_EXISTS" ]; then
+            # Copy the secret from the central namespace
+            echo "Copying wildcard certificate secret from workspace-system namespace"
+            kubectl get secret -n workspace-system workspace-domain-wildcard-tls -o yaml | \
+            sed "s/namespace: workspace-system/namespace: $NAMESPACE/" | \
+            kubectl apply -f -
+        fi
+        
+        echo "Creating ingress for port $PORT with hostname $SUBDOMAIN-$PORT.$WORKSPACE_DOMAIN"
+        
+        # Create a temporary file for the ingress manifest
+        cat > /tmp/ingress.yaml << EOF
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: port-forward-$PORT
+      namespace: $NAMESPACE
+      labels:
+        app: workspace-port
+      annotations:
+        #cert-manager.io/cluster-issuer: letsencrypt-prod
+        kubernetes.io/ingress.class: nginx
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    spec:
+      tls:
+      - hosts:
+        - "*.$WORKSPACE_DOMAIN"
+        secretName: "workspace-domain-wildcard-tls"
+      rules:
+      - host: $SUBDOMAIN-$PORT.$WORKSPACE_DOMAIN
+        http:
+          paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: code-server
+                port:
+                  number: $PORT
+    EOF
+        
+        # Apply the ingress
+        kubectl apply -f /tmp/ingress.yaml
+        rm /tmp/ingress.yaml
+        
+        echo "Created ingress for port $PORT ($SUBDOMAIN-$PORT.$WORKSPACE_DOMAIN)"
+    }
+    
+    # Get the pod name
+    POD_NAME=$(hostname)
+    echo "Running in pod: $POD_NAME"
+    
+    # Find the container name for code-server
+    echo "Checking containers in pod..."
+    CONTAINERS=$(kubectl get pod $POD_NAME -n $NAMESPACE -o jsonpath='{.spec.containers[*].name}' 2>/dev/null)
+    echo "Pod containers: $CONTAINERS"
+    
+    # Look for code-server container - try different names
+    if echo "$CONTAINERS" | grep -q "code-server"; then
+      CODE_SERVER_CONTAINER="code-server"
+    elif echo "$CONTAINERS" | grep -q "controller"; then
+      CODE_SERVER_CONTAINER="controller"
+    else
+      # Use the first container that's not port-detector
+      CODE_SERVER_CONTAINER=$(echo "$CONTAINERS" | tr ' ' '\n' | grep -v "port-detector" | head -1)
+    fi
+    
+    echo "Using code-server container: $CODE_SERVER_CONTAINER"
+    
+    # Continuously monitor for new listening ports
+    echo "Starting port monitoring loop..."
+    while true; do
+        echo "Checking for open ports..."
+        
+        # Try multiple approaches to detect ports
+        CURRENT_PORTS=""
+        
+        # If we found a valid code-server container, check ports inside it
+        if [ -n "$CODE_SERVER_CONTAINER" ]; then
+          echo "Checking ports in $CODE_SERVER_CONTAINER container..."
+          
+          # Try netstat in the container
+          NETSTAT_PORTS=$(kubectl exec $POD_NAME -n $NAMESPACE -c $CODE_SERVER_CONTAINER -- netstat -tlpn 2>/dev/null | grep -v 127.0.0.1 | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' | sort -n | uniq) || echo "Netstat command failed in container"
+          
+          if [ -n "$NETSTAT_PORTS" ]; then
+            CURRENT_PORTS="$NETSTAT_PORTS"
+            echo "Detected ports with netstat in container: $CURRENT_PORTS"
+          else
+            echo "No ports detected with netstat in container, trying lsof..."
+            LSOF_PORTS=$(kubectl exec $POD_NAME -n $NAMESPACE -c $CODE_SERVER_CONTAINER -- lsof -i -P -n 2>/dev/null | grep LISTEN | awk '{print $9}' | awk -F: '{print $NF}' | sort -n | uniq) || echo "Lsof command failed in container"
+            
+            if [ -n "$LSOF_PORTS" ]; then
+              CURRENT_PORTS="$LSOF_PORTS"
+              echo "Detected ports with lsof in container: $CURRENT_PORTS"
+            fi
+          fi
+        fi
+        
+        # If we didn't find ports in the container, try locally
+        if [ -z "$CURRENT_PORTS" ]; then
+          echo "Checking ports locally with netstat..."
+          NETSTAT_PORTS=$(netstat -tlpn 2>/dev/null | grep -v 127.0.0.1 | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' | sort -n | uniq)
+          
+          if [ -n "$NETSTAT_PORTS" ]; then
+            CURRENT_PORTS="$NETSTAT_PORTS"
+            echo "Detected ports locally with netstat: $CURRENT_PORTS"
+          else
+            echo "Checking ports locally with lsof..."
+            LSOF_PORTS=$(lsof -i -P -n 2>/dev/null | grep LISTEN | awk '{print $9}' | awk -F: '{print $NF}' | sort -n | uniq)
+            
+            if [ -n "$LSOF_PORTS" ]; then
+              CURRENT_PORTS="$LSOF_PORTS"
+              echo "Detected ports locally with lsof: $CURRENT_PORTS"
+            else
+              echo "Checking ports with ss..."
+              SS_PORTS=$(ss -tunlp 2>/dev/null | grep LISTEN | grep -v 127.0.0.1 | awk '{print $5}' | awk -F: '{print $NF}' | sort -n | uniq)
+              
+              if [ -n "$SS_PORTS" ]; then
+                CURRENT_PORTS="$SS_PORTS"
+                echo "Detected ports with ss: $CURRENT_PORTS"
+              fi
+            fi
+          fi
+        fi
+        
+        echo "Final detected ports: $CURRENT_PORTS"
+        
+        if [ -z "$CURRENT_PORTS" ]; then
+            echo "No ports detected. Sleeping for 30 seconds..."
+            sleep 30
+            continue
+        fi
+        
+        # Check each port
+        for PORT in $CURRENT_PORTS; do
+            echo "Processing port: $PORT"
+            
+            # Skip system ports or ports that can't be numbers
+            if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+                echo "Skipping non-numeric port: $PORT"
+                continue
+            fi
+            
+            # Convert to number and check range
+            PORT_NUM=$((PORT))
+            if [ $PORT_NUM -lt 1024 ] || [ $PORT_NUM -eq 8443 ]; then
+                echo "Skipping system port: $PORT"
+                continue
+            fi
+            
+            echo "Checking if ingress exists for port $PORT"
+            # Check if ingress already exists
+            INGRESS_EXISTS=$(kubectl get ingress -n $NAMESPACE port-forward-$PORT 2>/dev/null)
+            
+            if [ -z "$INGRESS_EXISTS" ]; then
+                echo "Creating ingress for port $PORT"
+                create_ingress $PORT
+
+                # Updating service to dynamically add port
+                echo "Extending port on code-server..."
+                kubectl patch service code-server -n $NAMESPACE --type='json' -p="[{\"op\": \"add\", \"path\": \"/spec/ports/-\", \"value\": {\"name\": \"port-$PORT_NUM\", \"port\": $PORT_NUM, \"targetPort\": $PORT_NUM}}]"
+                
+                echo "Updating ConfigMap with new port mapping"
+                # Update the port mappings in workspace-info ConfigMap
+                CM_DATA=$(kubectl get configmap -n $NAMESPACE workspace-info -o jsonpath='{.data.info}')
+                
+                # Modify the ConfigMap update section
+                if [ -n "$CM_DATA" ]; then
+                    # Parse the existing data, add portMappings if not exists
+                    NEW_CM_DATA=$(echo "$CM_DATA" | jq --arg port "$PORT" --arg url "https://$SUBDOMAIN-$PORT.$WORKSPACE_DOMAIN" \
+                        '.portMappings = (.portMappings // {}) | .portMappings[$port] = $url | tostring')
+                    
+                    # Update the ConfigMap
+                    echo "Patching ConfigMap with new data"
+                    kubectl patch configmap -n $NAMESPACE workspace-info --type=merge -p "{\"data\":{\"info\":$NEW_CM_DATA}}"
+                else
+                    echo "Warning: Could not update ConfigMap, info data not found"
+                fi
+            else
+                echo "Ingress already exists for port $PORT"
+            fi
+        done
+        
+        # Wait before checking again
+        echo "Completed port check. Sleeping for 30 seconds before next check..."
+        sleep 30
+    done

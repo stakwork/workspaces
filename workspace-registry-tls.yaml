@@ -1,0 +1,28 @@
+---
+# Job to generate self-signed certificates
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-registry-certs
+  namespace: workspace-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: cert-generator
+        image: alpine/openssl
+        command:
+        - /bin/sh
+        - -c
+        - |
+          mkdir -p /certs
+          openssl req -x509 -newkey rsa:4096 -keyout /certs/tls.key -out /certs/tls.crt -days 365 -nodes -subj '/CN=registry.workspace-system.svc.cluster.local'
+          kubectl create secret generic registry-tls-secret -n workspace-system --from-file=/certs/tls.key --from-file=/certs/tls.crt
+        volumeMounts:
+        - name: certs
+          mountPath: /certs
+      volumes:
+      - name: certs
+        emptyDir: {}
+      serviceAccountName: registry-cert-creator
+      restartPolicy: OnFailure

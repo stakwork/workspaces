@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-controller
+  namespace: workspace-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workspace-controller
+  template:
+    metadata:
+      labels:
+        app: workspace-controller
+    spec:
+      serviceAccountName: workspace-controller
+      containers:
+      - name: controller
+        image: xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-controller:latest
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-controller
+  namespace: workspace-system
+spec:
+  selector:
+    app: workspace-controller
+  ports:
+  - port: 3000
+    targetPort: 3000

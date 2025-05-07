@@ -1,0 +1,165 @@
+---
+# PersistentVolumeClaim for Registry Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: registry-storage
+  namespace: workspace-system
+spec:
+  accessModes:
+    - ReadWriteMany  # Using ReadWriteMany for EFS storage
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: efs-sc  # Use your EFS storage class
+
+---
+---
+# Registry Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: workspace-system
+spec:
+  selector:
+    matchLabels:
+      app: registry
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: registry
+    spec:
+      initContainers:
+      - name: cert-generator
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          apk add --no-cache openssl
+          
+          # Get pod IP from environment variable
+          POD_IP=$(hostname -i)
+          echo "Pod IP: $POD_IP"
+          
+          # Create openssl config
+          cat > /certs/openssl.cnf << EOF
+          [req]
+          distinguished_name = req_distinguished_name
+          req_extensions = v3_req
+          prompt = no
+          
+          [req_distinguished_name]
+          CN = registry.workspace-system.svc.cluster.local
+          
+          [v3_req]
+          subjectAltName = @alt_names
+          
+          [alt_names]
+          DNS.1 = registry.workspace-system.svc.cluster.local
+          DNS.2 = registry.workspace-system
+          DNS.3 = registry
+          IP.1 = $POD_IP
+          EOF
+          
+          # Generate certificate
+          openssl genrsa -out /certs/tls.key 4096
+          openssl req -x509 -new -nodes -key /certs/tls.key -sha256 -days 365 -out /certs/tls.crt -config /certs/openssl.cnf
+          
+          # Copy certificate to shared volume for configmap-creator
+          cp /certs/tls.crt /ca-cert/ca.crt
+          
+          # Display certificate information
+          echo "Certificate generated with SAN:"
+          openssl x509 -in /certs/tls.crt -text -noout | grep -A1 "Subject Alternative Name"
+
+          # Create/update the CA ConfigMap
+          kubectl create configmap registry-ca -n workspace-system --from-file=/ca-cert/ca.crt --dry-run=client -o yaml | kubectl apply -f -
+          echo "ConfigMap created/updated successfully"
+        volumeMounts:
+        - name: registry-certs
+          mountPath: /certs
+        - name: ca-cert
+          mountPath: /ca-cert
+      containers:
+      - name: registry
+        image: registry:2
+        ports:
+        - containerPort: 5000
+        env:
+        - name: REGISTRY_HTTP_TLS_CERTIFICATE
+          value: /certs/tls.crt
+        - name: REGISTRY_HTTP_TLS_KEY
+          value: /certs/tls.key
+        volumeMounts:
+        - name: registry-storage
+          mountPath: /var/lib/registry
+        - name: registry-certs
+          mountPath: /certs
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 5000
+            scheme: HTTPS  # Update this to HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 5000
+            scheme: HTTPS  # Update this to HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      volumes:
+      - name: registry-storage
+        persistentVolumeClaim:
+          claimName: registry-storage
+      - name: registry-certs
+        emptyDir: {}
+      - name: ca-cert
+        emptyDir: {}
+      serviceAccountName: registry-admin
+
+---
+# Registry Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: workspace-system
+spec:
+  selector:
+    app: registry
+  ports:
+  - port: 5000
+    targetPort: 5000
+  type: ClusterIP
+
+---
+# NetworkPolicy to allow access from all namespaces
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-registry-access
+  namespace: workspace-system
+spec:
+  podSelector:
+    matchLabels:
+      app: registry
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          allowed-registry-access: "true"
+    ports:
+    - protocol: TCP
+      port: 5000
