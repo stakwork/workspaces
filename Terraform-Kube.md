@@ -1,39 +1,61 @@
-# Initialize Terraform
+### Initialize Terraform
+```bash
 terraform init
+```
 
-# Apply the Terraform configuration
+### Apply the Terraform configuration
+
+```bash
 terraform apply
+```
 
-# Configure kubectl to work with the EKS cluster
+### Configure kubectl to work with the EKS cluster
+
+```bash
 aws --profile MY_PROFILE eks update-kubeconfig --region us-east-1 --name workspace-cluster
+```
 
-# Add the Nginx Ingress Controller repo
+### Add the Nginx Ingress Controller repo
+```bash
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
+```
 
-# Install Nginx Ingress Controller
+### Install Nginx Ingress Controller
+```bash
 helm install nginx-ingress ingress-nginx/ingress-nginx \
   --namespace ingress-nginx \
   --create-namespace \
   --set controller.service.type=LoadBalancer
+```
 
-  # Install cert-manager
+### Install cert-manager
+```bash
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
+```
 
-# Wait for cert-manager to be ready
+### Wait for cert-manager to be ready
+```bash
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager
+```
 
-# Create a wildcard cert and ClusterIssuer for Let's Encrypt
+### Create a wildcard cert and ClusterIssuer for Let's Encrypt
+```bash
 kubectl apply -f workspace-certs.yaml
 kubectl apply -f workspace-cluster-issuer.yaml
-
-# Get EFS ID from Terraform output
+```
+### Get EFS ID from Terraform output
+```bash
 EFS_ID=$(terraform output -raw efs_id)
+```
 
-# Install EFS CSI Driver
+### Install EFS CSI Driver
+```bash
 kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"
+```
 
-# Create a StorageClass for EFS
+### Create a StorageClass for EFS
+```bash
 cat <<EOF | kubectl apply -f -
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
@@ -45,11 +67,15 @@ parameters:
   fileSystemId: $EFS_ID
   directoryPerms: "700"
 EOF
+```
 
-# Create a namespace for external-dns
+### Create a namespace for external-dns
+```bash
 kubectl create namespace external-dns
+```
 
-# Create a service account for external-dns
+### Create a service account for external-dns
+```bash
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ServiceAccount
@@ -57,8 +83,10 @@ metadata:
   name: external-dns
   namespace: external-dns
 EOF
+```
 
-# Create RBAC permissions for external-dns
+### Create RBAC permissions for external-dns
+```bash
 cat <<EOF | kubectl apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -90,8 +118,10 @@ subjects:
   name: external-dns
   namespace: external-dns
 EOF
+```
 
-# Deploy external-dns with the IAM role
+### Deploy external-dns with the IAM role
+```bash
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 ZONE_ID=REPLACE_ME
 DOMAIN_NAME=REPLACE_ME
@@ -127,35 +157,56 @@ spec:
       securityContext:
         fsGroup: 65534
 EOF
+```
 
-# Create a namespace for the workspace controller
+### Create a namespace for the workspace controller
+```bash
 kubectl create namespace workspace-system
+```
 
-# Create a ConfigMap with the domain settings
+### Create a ConfigMap with the domain settings
+```bash
 kubectl apply -f workspace-domain-settings.yaml
+```
 
-# Create a service account for the controller
+### Create a service account for the controller
+```bash
 kubectl apply -f workspace-service-account.yaml
+```
 
-# Create RBAC permissions
+### Create RBAC permissions
+```bash
 kubectl apply -f workspace-rbac-permissions.yaml
+```
 
-# Cluster Role Binding
+### Cluster Role Binding
+```bash
 kubectl apply -f workspace-cluster-role-binding.yaml
+```
 
-# Create the port forwarding sidecar deployment
+### Create the port forwarding sidecar deployment
+```bash
 kubectl apply -f port_detector/*.yaml
+```
 
-# Create the controller deployment
+### Create the controller deployment
+```bash
 kubectl apply -f workspace_controller/k8s/deployment.yaml
+```
 
-# Create a deployment for the admin UI
+### Create a deployment for the admin UI
+```bash
 kubectl apply -f workspace-ui.yaml
+```
 
-# Create ingress for the workspace admin UI
+### Create ingress for the workspace admin UI
+```bash
 kubectl apply -f workspace-ingress-admin.yaml
+```
 
-# Install Prometheus and Grafana for monitoring
+### Install Prometheus and Grafana for monitoring
+
+```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
 
@@ -167,9 +218,11 @@ helm install grafana grafana/grafana \
   --namespace monitoring \
   --set persistence.enabled=true \
   --set adminPassword=MY_ADMIN_PASSWORD
+```
 
+### Apply Horizontal Pod Autoscaler for the workspace deployments
 
-# Apply Horizontal Pod Autoscaler for the workspace deployments
+```bash
 cat <<EOF | kubectl apply -f -
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -198,10 +251,14 @@ kubectl annotate serviceaccount -n kube-system efs-csi-controller-sa --overwrite
 
 kubectl rollout restart deployment efs-csi-controller -n kube-system
 kubectl get serviceaccount efs-csi-controller-sa -n kube-system -o yaml
+```
 
-# Update security group for EFS -> EKS
+### Update security group for EFS -> EKS
+
+```bash
 aws ec2 authorize-security-group-ingress \
   --group-id sg-0e0fd53dc0dcb9546 \
   --protocol tcp \
   --port 2049 \
   --source-group sg-0e46cfe9e2ee450e7
+```
