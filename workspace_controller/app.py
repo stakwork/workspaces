@@ -466,6 +466,81 @@ def _create_workspace_secret(workspace_ids):
     core_v1.create_namespaced_secret(workspace_ids['namespace_name'], secret)
     logger.info(f"Created secret in namespace: {workspace_ids['namespace_name']}")
 
+def _parse_devcontainer_features(devcontainer_path):
+    """Parse and handle features from devcontainer.json"""
+    return f"""
+    if [ -f "{devcontainer_path}" ]; then
+        echo "Processing devcontainer.json features from {devcontainer_path}"
+        
+        # Install jq if needed
+        if ! command -v jq &> /dev/null; then
+            apt-get update && apt-get install -y jq
+        fi
+        
+        # Extract features
+        FEATURES=$(jq -r '.features // empty' "{devcontainer_path}")
+        if [ ! -z "$FEATURES" ] && [ "$FEATURES" != "null" ]; then
+            echo "Installing devcontainer features..."
+            
+            # Process common features
+            if jq -e '.["ghcr.io/devcontainers/features/docker-in-docker"]' > /dev/null 2>&1; then
+                echo "Installing docker-in-docker feature..."
+                curl -fsSL https://raw.githubusercontent.com/microsoft/vscode-dev-containers/main/script-library/docker-debian.sh | bash
+            fi
+            
+            if jq -e '.["ghcr.io/devcontainers/features/github-cli"]' > /dev/null 2>&1; then
+                echo "Installing GitHub CLI..."
+                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                apt-get update && apt-get install -y gh
+            fi
+            
+            if jq -e '.["ghcr.io/devcontainers/features/node"]' > /dev/null 2>&1; then
+                VERSION=$(jq -r '.["ghcr.io/devcontainers/features/node"].version // "lts"' "{devcontainer_path}")
+                echo "Installing Node.js version: $VERSION"
+                curl -fsSL https://deb.nodesource.com/setup_$VERSION.x | bash -
+                apt-get install -y nodejs
+            fi
+        fi
+        
+        # Handle settings
+        SETTINGS=$(jq -r '.settings // empty' "{devcontainer_path}")
+        if [ ! -z "$SETTINGS" ] && [ "$SETTINGS" != "null" ]; then
+            echo "Applying VS Code settings..."
+            mkdir -p /config/data/Machine
+            echo "$SETTINGS" > /config/data/Machine/settings.json
+        fi
+        
+        # Handle postCreateCommand
+        POST_CREATE=$(jq -r '.postCreateCommand // empty' "{devcontainer_path}")
+        if [ ! -z "$POST_CREATE" ] && [ "$POST_CREATE" != "null" ]; then
+            echo "Running postCreateCommand: $POST_CREATE"
+            eval "$POST_CREATE"
+        fi
+        
+        # Handle postStartCommand
+        POST_START=$(jq -r '.postStartCommand // empty' "{devcontainer_path}")
+        if [ ! -z "$POST_START" ] && [ "$POST_START" != "null" ]; then
+            echo "Running postStartCommand: $POST_START"
+            eval "$POST_START"
+        fi
+        
+        # Handle forwardPorts
+        PORTS=$(jq -r '.forwardPorts[]? // empty' "{devcontainer_path}")
+        if [ ! -z "$PORTS" ]; then
+            echo "Configuring port forwarding for: $PORTS"
+            echo "$PORTS" > /workspaces/.ports-to-forward
+        fi
+        
+        # Handle remoteUser
+        REMOTE_USER=$(jq -r '.remoteUser // empty' "{devcontainer_path}")
+        if [ ! -z "$REMOTE_USER" ] && [ "$REMOTE_USER" != "null" ]; then
+            echo "Configuring remote user: $REMOTE_USER"
+            useradd -m -s /bin/bash "$REMOTE_USER"
+            echo "$REMOTE_USER ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/$REMOTE_USER
+        fi
+    fi
+    """
 def _create_init_script_configmap(workspace_ids, workspace_config):
     """Create ConfigMap with initialization scripts"""
     # Start with base repository cloning script
