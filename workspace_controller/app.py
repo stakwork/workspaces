@@ -466,6 +466,81 @@ def _create_workspace_secret(workspace_ids):
     core_v1.create_namespaced_secret(workspace_ids['namespace_name'], secret)
     logger.info(f"Created secret in namespace: {workspace_ids['namespace_name']}")
 
+def _parse_devcontainer_features(devcontainer_path):
+    """Parse and handle features from devcontainer.json"""
+    return f"""
+    if [ -f "{devcontainer_path}" ]; then
+        echo "Processing devcontainer.json features from {devcontainer_path}"
+        
+        # Install jq if needed
+        if ! command -v jq &> /dev/null; then
+            apt-get update && apt-get install -y jq
+        fi
+        
+        # Extract features
+        FEATURES=$(jq -r '.features // empty' "{devcontainer_path}")
+        if [ ! -z "$FEATURES" ] && [ "$FEATURES" != "null" ]; then
+            echo "Installing devcontainer features..."
+            
+            # Process common features
+            if jq -e '.["ghcr.io/devcontainers/features/docker-in-docker"]' > /dev/null 2>&1; then
+                echo "Installing docker-in-docker feature..."
+                curl -fsSL https://raw.githubusercontent.com/microsoft/vscode-dev-containers/main/script-library/docker-debian.sh | bash
+            fi
+            
+            if jq -e '.["ghcr.io/devcontainers/features/github-cli"]' > /dev/null 2>&1; then
+                echo "Installing GitHub CLI..."
+                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                apt-get update && apt-get install -y gh
+            fi
+            
+            if jq -e '.["ghcr.io/devcontainers/features/node"]' > /dev/null 2>&1; then
+                VERSION=$(jq -r '.["ghcr.io/devcontainers/features/node"].version // "lts"' "{devcontainer_path}")
+                echo "Installing Node.js version: $VERSION"
+                curl -fsSL https://deb.nodesource.com/setup_$VERSION.x | bash -
+                apt-get install -y nodejs
+            fi
+        fi
+        
+        # Handle settings
+        SETTINGS=$(jq -r '.settings // empty' "{devcontainer_path}")
+        if [ ! -z "$SETTINGS" ] && [ "$SETTINGS" != "null" ]; then
+            echo "Applying VS Code settings..."
+            mkdir -p /config/data/Machine
+            echo "$SETTINGS" > /config/data/Machine/settings.json
+        fi
+        
+        # Handle postCreateCommand
+        POST_CREATE=$(jq -r '.postCreateCommand // empty' "{devcontainer_path}")
+        if [ ! -z "$POST_CREATE" ] && [ "$POST_CREATE" != "null" ]; then
+            echo "Running postCreateCommand: $POST_CREATE"
+            eval "$POST_CREATE"
+        fi
+        
+        # Handle postStartCommand
+        POST_START=$(jq -r '.postStartCommand // empty' "{devcontainer_path}")
+        if [ ! -z "$POST_START" ] && [ "$POST_START" != "null" ]; then
+            echo "Running postStartCommand: $POST_START"
+            eval "$POST_START"
+        fi
+        
+        # Handle forwardPorts
+        PORTS=$(jq -r '.forwardPorts[]? // empty' "{devcontainer_path}")
+        if [ ! -z "$PORTS" ]; then
+            echo "Configuring port forwarding for: $PORTS"
+            echo "$PORTS" > /workspaces/.ports-to-forward
+        fi
+        
+        # Handle remoteUser
+        REMOTE_USER=$(jq -r '.remoteUser // empty' "{devcontainer_path}")
+        if [ ! -z "$REMOTE_USER" ] && [ "$REMOTE_USER" != "null" ]; then
+            echo "Configuring remote user: $REMOTE_USER"
+            useradd -m -s /bin/bash "$REMOTE_USER"
+            echo "$REMOTE_USER ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/$REMOTE_USER
+        fi
+    fi
+    """
 def _create_init_script_configmap(workspace_ids, workspace_config):
     """Create ConfigMap with initialization scripts"""
     # Start with base repository cloning script
@@ -478,13 +553,14 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     mkdir -p /workspaces/.user-dockerfile
     cd /workspaces/.code-server-wrapper
     
-    # Locate the user's Dockerfile in their repo
+    # Locate the user's Dockerfile and devcontainer.json in their repo
     USER_REPO_PATH="/workspaces/{workspace_config['repo_name']}"
     DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
     DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
+    ALT_DEVCONTAINER_PATH="$USER_REPO_PATH/.devcontainer.json"
     
     # Debug info
-    echo "DEBUG: Checking repository and Dockerfile"
+    echo "DEBUG: Checking repository and configuration files"
     if [ -d "$USER_REPO_PATH" ]; then
         echo "DEBUG: Repository directory exists at $USER_REPO_PATH"
         ls -la "$USER_REPO_PATH"
@@ -492,132 +568,85 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
         echo "DEBUG: ERROR - Repository directory does not exist at $USER_REPO_PATH"
     fi
     
-    if [ -d "$USER_REPO_PATH/.devcontainer" ]; then
-        echo "DEBUG: .devcontainer directory exists"
-        ls -la "$USER_REPO_PATH/.devcontainer"
-    else
-        echo "DEBUG: .devcontainer directory does not exist"
-    fi
-    
-    if [ -f "$DOCKERFILE_PATH" ]; then
-        echo "DEBUG: Dockerfile exists at $DOCKERFILE_PATH"
-        cat "$DOCKERFILE_PATH" | head -n 10
-    else
-        echo "DEBUG: Dockerfile does not exist at $DOCKERFILE_PATH"
-    fi
-
-    # Check for devcontainer.json
-    if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
-        echo "DEBUG: devcontainer.json exists at $DEVCONTAINER_JSON_PATH"
-        cat "$DEVCONTAINER_JSON_PATH" | head -n 20
-    else
-        echo "DEBUG: devcontainer.json does not exist at $DEVCONTAINER_JSON_PATH"
-    fi
-    
-    # Check if the first repository actually got cloned
-    if [ ! -d "$USER_REPO_PATH" ]; then
-        echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
-        cd /workspaces
-        git clone {workspace_config['github_urls'][0]} {workspace_config['repo_name']}
-    fi
-    
-    # Check again after potential re-cloning
-    if [ -f "$DOCKERFILE_PATH" ]; then
-        echo "Found user Dockerfile at $DOCKERFILE_PATH"
-        # Copy the user's Dockerfile
-        cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
-        
-        # Check if there's a devcontainer.json file
-        if [ -f "$USER_REPO_PATH/.devcontainer/devcontainer.json" ]; then
-            echo "Found devcontainer.json - copying to build context"
-            cp "$USER_REPO_PATH/.devcontainer/devcontainer.json" /workspaces/.user-dockerfile/
-        fi
-
-        # Check if there's a devcontainer.json file and parse extensions
-        if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
-            echo "Found devcontainer.json - copying to build context"
-            cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
+    # Check for devcontainer configurations
+    for DEVCONTAINER_PATH in "$DEVCONTAINER_JSON_PATH" "$ALT_DEVCONTAINER_PATH"; do
+        if [ -f "$DEVCONTAINER_PATH" ]; then
+            echo "Found devcontainer.json at $DEVCONTAINER_PATH"
             
-            # Extract extensions from devcontainer.json
+            # Process devcontainer features and settings
+            {_parse_devcontainer_features("$DEVCONTAINER_PATH")}
+            
+            # Extract extensions
             if command -v jq &> /dev/null; then
-                echo "jq found, using it to extract extensions"
-                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]?' "$DEVCONTAINER_JSON_PATH" 2>/dev/null || echo "")
-            else
-                echo "Installing jq to parse devcontainer.json"
-                apt-get update && apt-get install -y jq
-                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]?' "$DEVCONTAINER_JSON_PATH" 2>/dev/null || echo "")
-            fi
-            
-            if [ ! -z "$EXTENSIONS" ]; then
-                echo "Found extensions in devcontainer.json:"
-                echo "$EXTENSIONS"
-                echo "$EXTENSIONS" > /workspaces/.extensions-list
-            else
-                echo "No extensions found in devcontainer.json or couldn't parse"
-            fi
-            
-            # Create a script to install the extensions during container startup
-            echo "Creating extension installation script"
-            cat > /workspaces/install-extensions.sh << 'EOL'
+                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]? // empty' "$DEVCONTAINER_PATH")
+                if [ ! -z "$EXTENSIONS" ]; then
+                    echo "Found extensions in devcontainer.json:"
+                    echo "$EXTENSIONS"
+                    echo "$EXTENSIONS" > /workspaces/.extensions-list
+                    
+                    # Create extension installation script
+                    cat > /workspaces/install-extensions.sh << 'EOL'
 #!/bin/bash
 EXTENSIONS_FILE="/workspaces/.extensions-list"
 
 if [ -f "$EXTENSIONS_FILE" ]; then
-  echo "Installing extensions from devcontainer.json..."
-  while IFS= read -r extension; do
-    if [ ! -z "$extension" ]; then
-      echo "Installing extension: $extension"
-      code-server --install-extension "$extension" || echo "Failed to install: $extension"
-    fi
-  done < "$EXTENSIONS_FILE"
-  echo "Finished installing extensions"
-else
-  echo "No extensions list found"
+    echo "Installing VS Code extensions..."
+    while IFS= read -r extension; do
+        if [ ! -z "$extension" ]; then
+            echo "Installing extension: $extension"
+            code-server --install-extension "$extension" || echo "Failed to install: $extension"
+        fi
+    done < "$EXTENSIONS_FILE"
+    echo "Extension installation completed"
 fi
 EOL
-            chmod +x /workspaces/install-extensions.sh
+                    chmod +x /workspaces/install-extensions.sh
+                fi
+            fi
+            break
         fi
-        
-        # Check if there's a docker-compose.yml file
-        if [ -f "$USER_REPO_PATH/.devcontainer/docker-compose.yml" ]; then
-            echo "Found docker-compose.yml - copying to build context"
-            cp "$USER_REPO_PATH/.devcontainer/docker-compose.yml" /workspaces/.user-dockerfile/
-        fi
-        
-        # Copy any other files in the .devcontainer directory
-        if [ -d "$USER_REPO_PATH/.devcontainer" ]; then
-            echo "Copying all files from .devcontainer directory"
-            cp -r "$USER_REPO_PATH/.devcontainer/"* /workspaces/.user-dockerfile/
-        fi
-    else
-        echo "Warning: No Dockerfile found at $DOCKERFILE_PATH"
-        echo "Using default Go dev container image instead"
-        echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+    done
+    
+    # Check if the repository needs to be cloned again
+    if [ ! -d "$USER_REPO_PATH" ]; then
+        echo "Repository not found, cloning again..."
+        cd /workspaces
+        git clone {workspace_config['github_urls'][0]} {workspace_config['repo_name']}
     fi
     
-    # Create a wrapper Dockerfile that uses the user's image as a base
+    # Handle Dockerfile
+    if [ -f "$DOCKERFILE_PATH" ]; then
+        echo "Found user Dockerfile - copying to build context"
+        cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
+        cp -r "$(dirname "$DOCKERFILE_PATH")"/* /workspaces/.user-dockerfile/
+    else
+        echo "No Dockerfile found, using default image"
+        echo "FROM mcr.microsoft.com/devcontainers/universal:latest" > /workspaces/.user-dockerfile/Dockerfile
+    fi
+    
+    # Create wrapper Dockerfile
     cat > Dockerfile << 'EOF'
-# This will be replaced with the tag for the user's custom image
 FROM xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}
 
 # Install code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-# Expose default code-server port
+# Install common development tools
+RUN apt-get update && apt-get install -y \\
+    git curl wget unzip \\
+    build-essential \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Expose code-server port
 EXPOSE 8443
 
-# Set up entrypoint to run code-server
-#ENTRYPOINT ["/usr/bin/code-server", "--bind-addr", "0.0.0.0:8443", "--auth", "password"]
+# Set up entrypoint
 ENTRYPOINT ["/bin/sh", "-c", "if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password"]
 CMD ["--user-data-dir", "/config/data", "--extensions-dir", "/config/extensions", "/workspaces"]
 EOF
     
     echo "Created wrapper Dockerfile for code-server"
-    
-    # Create a flag file to indicate setup is done
     touch /workspaces/.code-server-initialized
-    
-    # Initialize workspace
     echo "Workspace initialization completed!"
     """
     
