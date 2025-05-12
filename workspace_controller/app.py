@@ -8,6 +8,7 @@ import yaml
 import string
 import random
 import logging
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from kubernetes import client, config
@@ -470,6 +471,9 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     """Create ConfigMap with initialization scripts"""
     # Start with base repository cloning script
     init_script = _generate_init_script(workspace_ids, workspace_config)
+    
+    namespace_name = workspace_ids['namespace_name']
+    repo_name = workspace_config['repo_name']
 
     # Add code to create a wrapper Dockerfile that uses the user's Dockerfile as a base
     init_script += f"""
@@ -479,7 +483,7 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     cd /workspaces/.code-server-wrapper
     
     # Locate the user's Dockerfile in their repo
-    USER_REPO_PATH="/workspaces/{workspace_config['repo_name']}"
+    USER_REPO_PATH="/workspaces/{repo_name}"
     DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
     DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
     
@@ -518,7 +522,7 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     if [ ! -d "$USER_REPO_PATH" ]; then
         echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
         cd /workspaces
-        git clone {workspace_config['github_urls'][0]} {workspace_config['repo_name']}
+        git clone {workspace_config['github_urls'][0]} {repo_name}
     fi
     
     # Check again after potential re-cloning
@@ -527,27 +531,26 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
         # Copy the user's Dockerfile
         cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
         
-        # Check if there's a devcontainer.json file
-        if [ -f "$USER_REPO_PATH/.devcontainer/devcontainer.json" ]; then
-            echo "Found devcontainer.json - copying to build context"
-            cp "$USER_REPO_PATH/.devcontainer/devcontainer.json" /workspaces/.user-dockerfile/
-        fi
-
-        # Check if there's a devcontainer.json file and parse extensions
+        # Process devcontainer.json if it exists
         if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
-            echo "Found devcontainer.json - copying to build context"
+            echo "Found devcontainer.json - processing configuration"
+            
+            # Copy the devcontainer.json file to the build context
             cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
             
-            # Extract extensions from devcontainer.json
-            if command -v jq &> /dev/null; then
-                echo "jq found, using it to extract extensions"
-                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]?' "$DEVCONTAINER_JSON_PATH" 2>/dev/null || echo "")
-            else
+            # Install jq if needed for JSON processing
+            if ! command -v jq &> /dev/null; then
                 echo "Installing jq to parse devcontainer.json"
                 apt-get update && apt-get install -y jq
-                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]?' "$DEVCONTAINER_JSON_PATH" 2>/dev/null || echo "")
             fi
             
+            # Extract extensions from devcontainer.json (support both formats)
+            EXTENSIONS=$(jq -r '.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ -z "$EXTENSIONS" ]; then
+                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            fi
+            
+            # Save extensions to file if found
             if [ ! -z "$EXTENSIONS" ]; then
                 echo "Found extensions in devcontainer.json:"
                 echo "$EXTENSIONS"
@@ -556,7 +559,89 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
                 echo "No extensions found in devcontainer.json or couldn't parse"
             fi
             
-            # Create a script to install the extensions during container startup
+            # Extract VS Code settings
+            SETTINGS=$(jq -r '.settings // .customizations.vscode.settings // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$SETTINGS" ]; then
+                echo "Found VS Code settings in devcontainer.json"
+                mkdir -p /workspaces/.vscode
+                echo "$SETTINGS" > /workspaces/.vscode/settings.json
+            fi
+            
+            # Extract features
+            FEATURES=$(jq -r '.features // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$FEATURES" ]; then
+                echo "Found features in devcontainer.json:"
+                echo "$FEATURES" > /workspaces/.devcontainer-features
+                echo "Note: Features support is limited in this implementation"
+            fi
+            
+            # Extract port forwarding configuration
+            PORTS=$(jq -r '.forwardPorts[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$PORTS" ]; then
+                echo "Found ports to forward in devcontainer.json:"
+                echo "$PORTS"
+                echo "$PORTS" > /workspaces/.forward-ports
+            fi
+            
+            # Extract other customizations
+            CUSTOMIZATIONS=$(jq -r '.customizations // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$CUSTOMIZATIONS" ]; then
+                echo "Found customizations in devcontainer.json"
+                echo "$CUSTOMIZATIONS" > /workspaces/.customizations
+            fi
+            
+            # Extract environment variables
+            ENV_VARS=$(jq -r '.containerEnv // empty | to_entries[] | "\\(.key)=\\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$ENV_VARS" ]; then
+                echo "Found environment variables in devcontainer.json:"
+                echo "$ENV_VARS"
+                echo "$ENV_VARS" > /workspaces/.container-env
+            fi
+            
+            # Extract remote environment variables
+            REMOTE_ENV_VARS=$(jq -r '.remoteEnv // empty | to_entries[] | "\\(.key)=\\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$REMOTE_ENV_VARS" ]; then
+                echo "Found remote environment variables in devcontainer.json:"
+                echo "$REMOTE_ENV_VARS"
+                echo "$REMOTE_ENV_VARS" > /workspaces/.remote-env
+            fi
+            
+            # Extract user configuration
+            REMOTE_USER=$(jq -r '.remoteUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            CONTAINER_USER=$(jq -r '.containerUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            
+            if [ ! -z "$REMOTE_USER" ] || [ ! -z "$CONTAINER_USER" ]; then
+                echo "Found user configuration in devcontainer.json"
+                
+                if [ ! -z "$REMOTE_USER" ]; then
+                    echo "remoteUser: $REMOTE_USER"
+                    echo "REMOTE_USER=$REMOTE_USER" > /workspaces/.user-config
+                fi
+                
+                if [ ! -z "$CONTAINER_USER" ]; then
+                    echo "containerUser: $CONTAINER_USER"
+                    echo "CONTAINER_USER=$CONTAINER_USER" >> /workspaces/.user-config
+                fi
+            fi
+            
+            # Extract lifecycle commands
+            POST_CREATE_CMD=$(jq -r '.postCreateCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$POST_CREATE_CMD" ]; then
+                echo "Found postCreateCommand in devcontainer.json"
+                echo "#!/bin/bash" > /workspaces/post-create-command.sh
+                echo "$POST_CREATE_CMD" >> /workspaces/post-create-command.sh
+                chmod +x /workspaces/post-create-command.sh
+            fi
+            
+            POST_START_CMD=$(jq -r '.postStartCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$POST_START_CMD" ]; then
+                echo "Found postStartCommand in devcontainer.json"
+                echo "#!/bin/bash" > /workspaces/post-start-command.sh
+                echo "$POST_START_CMD" >> /workspaces/post-start-command.sh
+                chmod +x /workspaces/post-start-command.sh
+            fi
+            
+            # Create a comprehensive extension installation script
             echo "Creating extension installation script"
             cat > /workspaces/install-extensions.sh << 'EOL'
 #!/bin/bash
@@ -567,7 +652,22 @@ if [ -f "$EXTENSIONS_FILE" ]; then
   while IFS= read -r extension; do
     if [ ! -z "$extension" ]; then
       echo "Installing extension: $extension"
-      code-server --install-extension "$extension" || echo "Failed to install: $extension"
+      # Try up to 3 times
+      for i in 1 2 3; do
+        if code-server --install-extension "$extension"; then
+          echo "Successfully installed: $extension"
+          break
+        else
+          echo "Attempt $i failed to install: $extension"
+          if [ $i -lt 3 ]; then
+            sleep_time=$((i * 5))
+            echo "Retrying in $sleep_time seconds..."
+            sleep $sleep_time
+          else
+            echo "Failed to install extension after 3 attempts: $extension"
+          fi
+        fi
+      done
     fi
   done < "$EXTENSIONS_FILE"
   echo "Finished installing extensions"
@@ -575,7 +675,83 @@ else
   echo "No extensions list found"
 fi
 EOL
-            chmod +x /workspaces/install-extensions.sh
+            
+            # Create a script to apply environment variables
+            echo "Creating environment setup script"
+            cat > /workspaces/setup-env.sh << 'EOL'
+#!/bin/bash
+# Apply container environment variables
+if [ -f "/workspaces/.container-env" ]; then
+  echo "Applying container environment variables"
+  while IFS= read -r env_var; do
+    if [ ! -z "$env_var" ]; then
+      export "$env_var"
+      echo "Exported: $env_var"
+    fi
+  done < "/workspaces/.container-env"
+fi
+
+# Apply remote environment variables
+if [ -f "/workspaces/.remote-env" ]; then
+  echo "Applying remote environment variables"
+  while IFS= read -r env_var; do
+    if [ ! -z "$env_var" ]; then
+      export "$env_var"
+      echo "Exported: $env_var"
+    fi
+  done < "/workspaces/.remote-env"
+fi
+
+# Apply user configuration
+if [ -f "/workspaces/.user-config" ]; then
+  echo "Applying user configuration from devcontainer.json"
+  source /workspaces/.user-config
+  
+  # Note: Full user switching would require more complex handling
+  # This is just setting environment variables for reference
+  if [ ! -z "$REMOTE_USER" ]; then
+    echo "Remote user set to: $REMOTE_USER"
+  fi
+  
+  if [ ! -z "$CONTAINER_USER" ]; then
+    echo "Container user set to: $CONTAINER_USER"
+  fi
+fi
+EOL
+            chmod +x /workspaces/setup-env.sh
+            
+            # Create a script to run lifecycle commands
+            echo "Creating lifecycle script"
+            cat > /workspaces/run-lifecycle.sh << 'EOL'
+#!/bin/bash
+# Run post-create command if it exists
+if [ -f "/workspaces/post-create-command.sh" ]; then
+  echo "Running postCreateCommand..."
+  /workspaces/post-create-command.sh
+fi
+
+# Run post-start command if it exists
+if [ -f "/workspaces/post-start-command.sh" ]; then
+  echo "Running postStartCommand..."
+  /workspaces/post-start-command.sh
+fi
+
+# Set up VS Code settings if they exist
+if [ -f "/workspaces/.vscode/settings.json" ]; then
+  echo "Applying VS Code settings..."
+  mkdir -p /config/data/User
+  cp /workspaces/.vscode/settings.json /config/data/User/settings.json
+fi
+
+# Handle port forwarding if configured
+if [ -f "/workspaces/.forward-ports" ]; then
+  echo "Setting up port forwarding..."
+  # Note: The actual port forwarding is handled by the Kubernetes ingress
+  # This is just for informational purposes
+  cat /workspaces/.forward-ports
+fi
+EOL
+            chmod +x /workspaces/run-lifecycle.sh
         fi
         
         # Check if there's a docker-compose.yml file
@@ -598,7 +774,7 @@ EOL
     # Create a wrapper Dockerfile that uses the user's image as a base
     cat > Dockerfile << 'EOF'
 # This will be replaced with the tag for the user's custom image
-FROM xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}
+FROM xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{namespace_name}
 
 # Install code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh
@@ -607,12 +783,9 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 EXPOSE 8443
 
 # Set up entrypoint to run code-server
-#ENTRYPOINT ["/usr/bin/code-server", "--bind-addr", "0.0.0.0:8443", "--auth", "password"]
-ENTRYPOINT ["/bin/sh", "-c", "if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password"]
+ENTRYPOINT ["/bin/sh", "-c", "if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password"]
 CMD ["--user-data-dir", "/config/data", "--extensions-dir", "/config/extensions", "/workspaces"]
 EOF
-    
-    echo "Created wrapper Dockerfile for code-server"
     
     # Create a flag file to indicate setup is done
     touch /workspaces/.code-server-initialized
