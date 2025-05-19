@@ -18,6 +18,76 @@ terraform {
   required_version = ">= 1.0"
 }
 
+import {
+  to = aws_iam_role.eks_cluster_role
+  id = "eks-cluster-role"
+}
+
+import {
+  to = aws_iam_role.eks_node_role
+  id = "eks-node-role"
+}
+
+import {
+  to = aws_efs_file_system.workspace_efs
+  id = "fs-0ea50a894517141ff"
+}
+
+import {
+  to = aws_iam_policy.external_dns
+  id = "arn:aws:iam::659092511241:policy/ExternalDNSPolicy"
+}
+
+import {
+  to = aws_iam_policy.efs_csi_driver_policy
+  id = "arn:aws:iam::659092511241:policy/EFSCSIDriverPolicy"
+}
+
+import {
+  to = aws_ecr_repository.workspace_controller
+  id = "workspace-controller"
+}
+
+import {
+  to = aws_ecr_repository.workspace_images
+  id = "workspace-images"
+}
+
+import {
+  to = aws_iam_policy.cert_manager_route53
+  id = "arn:aws:iam::659092511241:policy/CertManagerRoute53Policy"
+}
+
+import {
+  to = aws_eks_cluster.workspace_cluster
+  id = "workspace-cluster"
+}
+
+import {
+  to = aws_iam_policy.ecr_limited_access
+  id = "arn:aws:iam::659092511241:policy/ECRLimitedAccessPolicy"
+}
+
+import {
+  to = aws_iam_role.external_dns_role
+  id = "external-dns-role"
+}
+
+import {
+  to = aws_iam_role.efs_csi_driver_role
+  id = "efs-csi-driver-role"
+}
+
+import {
+  to = aws_iam_role.cert_manager_dns01_role
+  id = "cert-manager-dns01-role"
+}
+
+import {
+  to = aws_iam_role.workspace_controller_role
+  id = "workspace-controller-role"
+}
+
 provider "aws" {
   region = var.aws_region
 }
@@ -297,10 +367,6 @@ resource "aws_efs_file_system" "workspace_efs" {
   }
 }
 
-data "aws_security_group" "eks_node_sg" {
-  id = "sg-0e46cfe9e2ee450e7"  # The actual security group ID of your nodes
-}
-
 resource "aws_security_group" "efs_sg" {
   name        = "workspace-efs-sg"
   description = "Allow NFS traffic from EKS nodes"
@@ -310,7 +376,7 @@ resource "aws_security_group" "efs_sg" {
     from_port       = 2049
     to_port         = 2049
     protocol        = "tcp"
-    security_groups = [data.aws_security_group.eks_node_sg.id]  # Use data reference here
+    security_groups = [aws_eks_cluster.workspace_cluster.vpc_config[0].cluster_security_group_id]
   }
 
   egress {
@@ -349,14 +415,6 @@ resource "aws_security_group" "efs_sg" {
 #     Name = "workspace-efs-sg"
 #   }
 # }
-
-# EFS Mount Targets
-resource "aws_efs_mount_target" "workspace_efs_mount" {
-  count           = length(var.availability_zones)
-  file_system_id  = aws_efs_file_system.workspace_efs.id
-  subnet_id       = aws_subnet.private[count.index].id
-  security_groups = [aws_security_group.efs_sg.id]
-}
 
 # OIDC Provider for IAM roles for service accounts
 data "tls_certificate" "eks" {
