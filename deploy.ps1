@@ -26,6 +26,7 @@ $envVars.GetEnumerator() | ForEach-Object { Write-Host "$($_.Key) = $($_.Value)"
 
 # Replace placeholders in kubernetes files
 $filesToProcess = @(
+    "kubernetes/core/workspace-certs.yaml",
     "kubernetes/core/workspace-domain-settings.yaml",
     "kubernetes/core/workspace-ingress-admin.yaml",
     "kubernetes/port_detector/port-detector-configmap.yaml"
@@ -103,12 +104,9 @@ kubectl apply -f kubernetes/core/workspace-ui.yaml
 kubectl apply -f kubernetes/port_detector/port-detector-rbac.yaml
 kubectl apply -f kubernetes/port_detector/port-detector-configmap.yaml
 
-# Step 8: Deploy Controller components
-Write-Host "Step 8: Deploying Controller components..."
-kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
 
-# Step 9: Install Nginx Ingress Controller
-Write-Host "Step 9: Installing Nginx Ingress Controller..."
+# Step 8: Install Nginx Ingress Controller
+Write-Host "Step 8: Installing Nginx Ingress Controller..."
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
 helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx `
@@ -116,8 +114,8 @@ helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx `
     --set controller.service.type=LoadBalancer
 
 
-# Step 10: Create EFS StorageClass
-Write-Host "Step 10: Creating EFS StorageClass..."
+# Step 9: Create EFS StorageClass
+Write-Host "Step 9: Creating EFS StorageClass..."
 @"
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
@@ -131,8 +129,8 @@ parameters:
 "@ | Out-File -FilePath "./kubernetes/core/storage-class.yaml" -Encoding UTF8
 kubectl apply -f ./kubernetes/core/storage-class.yaml
 
-# Step 11: Update deployment.yaml with correct image
-Write-Host "Step 11: Updating deployment configuration..."
+# Step 10: Update deployment.yaml with correct image
+Write-Host "Step 10: Updating deployment configuration..."
 $deploymentContent = @"
 apiVersion: apps/v1
 kind: Deployment
@@ -151,7 +149,7 @@ spec:
     spec:
       containers:
       - name: workspace-controller
-        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/workspace-controller:latest
+        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
@@ -159,13 +157,17 @@ spec:
 
 $deploymentContent | Out-File -FilePath ".\kubernetes\workspace_controller\k8s\deployment.yaml" -Encoding UTF8
 
+# Step 11: Deploy Controller components
+Write-Host "Step 11: Deploying Controller components..."
+kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
+
 # Step 12: Build and push Docker image
 Write-Host "Step 12: Building and pushing Docker image..."
 Set-Location .\kubernetes\workspace_controller
-aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 docker build -t workspace-controller .
-docker tag workspace-controller:latest "$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/workspace-controller:latest"
-docker push "$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/workspace-controller:latest"
+docker tag workspace-controller:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/workspace-controller:latest"
+docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/workspace-controller:latest"
 Set-Location ..
 
 
@@ -190,7 +192,7 @@ spec:
     spec:
       containers:
       - name: workspace-controller
-        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/workspace-controller:latest
+        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 3000

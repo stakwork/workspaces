@@ -30,6 +30,7 @@ done
 
 # Replace placeholders in Kubernetes YAML files
 filesToProcess=(
+    "kubernetes/core/workspace-certs.yaml"
     "kubernetes/core/workspace-domain-settings.yaml"
     "kubernetes/core/workspace-ingress-admin.yaml"
     "kubernetes/port_detector/port-detector-configmap.yaml"
@@ -99,20 +100,16 @@ kubectl apply -f kubernetes/core/workspace-ui.yaml
 kubectl apply -f kubernetes/port_detector/port-detector-configmap.yaml
 kubectl apply -f kubernetes/port_detector/port-detector-rbac.yaml
 
-# Step 8: Deploy Controller
-echo "Step 8: Deploying Controller components..."
-kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
-
-# Step 9: Install NGINX Ingress
-echo "Step 9: Installing Nginx Ingress Controller..."
+# Step 8: Install NGINX Ingress
+echo "Step 8: Installing Nginx Ingress Controller..."
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
 helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
     --namespace ingress-nginx \
     --set controller.service.type=LoadBalancer
 
-# Step 10: Create EFS StorageClass
-echo "Step 10: Creating EFS StorageClass..."
+# Step 9: Create EFS StorageClass
+echo "Step 9: Creating EFS StorageClass..."
 cat <<EOF > ./kubernetes/core/storage-class.yaml
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
@@ -127,8 +124,8 @@ EOF
 
 kubectl apply -f ./kubernetes/core/storage-class.yaml
 
-# Step 11: Update deployment image
-echo "Step 11: Updating deployment configuration..."
+# Step 10: Update deployment image
+echo "Step 10: Updating deployment configuration..."
 cat <<EOF > ./kubernetes/workspace_controller/k8s/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -147,19 +144,23 @@ spec:
     spec:
       containers:
       - name: workspace-controller
-        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/workspace-controller:latest
+        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
 EOF
 
+# Step 11: Deploy Controller
+echo "Step 11: Deploying Controller components..."
+kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
+
 # Step 12: Build and push Docker image
 echo "Step 12: Building and pushing Docker image..." 
 cd kubernetes/workspace_controller
-aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 docker build -t workspace-controller .
-docker tag workspace-controller:latest "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/workspace-controller:latest"
-docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/workspace-controller:latest"
+docker tag workspace-controller:latest "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
+docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
 cd ../..
 
 # Step 13: Verify Deployment
