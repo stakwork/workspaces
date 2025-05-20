@@ -74,8 +74,13 @@ for ns in ingress-nginx cert-manager workspace-system monitoring; do
     kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-# Step 5: Apply Kubernetes core configs
-echo "Step 5: Applying Kubernetes configurations..."
+# Step 5: Install cert-manager
+echo "Step 5: Installing cert-manager..."
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
+
+
+# Step 6: Apply Kubernetes core configs
+echo "Step 6: Applying Kubernetes configurations..."
 kubectl apply -f kubernetes/core/workspace-certs.yaml
 kubectl apply -f kubernetes/core/workspace-cluster-issuer.yaml
 kubectl apply -f kubernetes/core/workspace-cluster-role-binding.yaml
@@ -90,28 +95,24 @@ kubectl apply -f kubernetes/core/workspace-registry.yaml
 kubectl apply -f kubernetes/core/workspace-service-account.yaml
 kubectl apply -f kubernetes/core/workspace-ui.yaml
 
-# Step 6: Port detector
+# Step 7: Port detector
 kubectl apply -f kubernetes/port_detector/port-detector-configmap.yaml
 kubectl apply -f kubernetes/port_detector/port-detector-rbac.yaml
 
-# Step 7: Deploy Controller
-echo "Step 6: Deploying Controller components..."
+# Step 8: Deploy Controller
+echo "Step 8: Deploying Controller components..."
 kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
 
-# Step 8: Install NGINX Ingress
-echo "Step 7: Installing Nginx Ingress Controller..."
+# Step 9: Install NGINX Ingress
+echo "Step 9: Installing Nginx Ingress Controller..."
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
-helm install nginx-ingress ingress-nginx/ingress-nginx \
+helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
     --namespace ingress-nginx \
     --set controller.service.type=LoadBalancer
 
-# Step 9: Install cert-manager
-echo "Step 8: Installing cert-manager..."
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
-
 # Step 10: Create EFS StorageClass
-echo "Step 9: Creating EFS StorageClass..."
+echo "Step 10: Creating EFS StorageClass..."
 cat <<EOF > ./kubernetes/core/storage-class.yaml
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
@@ -127,7 +128,7 @@ EOF
 kubectl apply -f ./kubernetes/core/storage-class.yaml
 
 # Step 11: Update deployment image
-echo "Step 10: Updating deployment configuration..."
+echo "Step 11: Updating deployment configuration..."
 cat <<EOF > ./kubernetes/workspace_controller/k8s/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -153,7 +154,7 @@ spec:
 EOF
 
 # Step 12: Build and push Docker image
-echo "Step 11: Building and pushing Docker image..."
+echo "Step 12: Building and pushing Docker image..." 
 cd kubernetes/workspace_controller
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 docker build -t workspace-controller .
@@ -162,7 +163,7 @@ docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/workspace-control
 cd ../..
 
 # Step 13: Verify Deployment
-echo "Step 12: Verifying deployment..."
+echo "Step 13: Verifying deployment..."
 kubectl get pods,svc,ingress -n workspace-system
 
 # Final Step: Port Forwarding

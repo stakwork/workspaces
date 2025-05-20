@@ -23,10 +23,6 @@ import {
   id = "eks-cluster-role"
 }
 
-import {
-  to = aws_iam_role.eks_node_role
-  id = "eks-node-role"
-}
 
 import {
   to = aws_efs_file_system.workspace_efs
@@ -34,59 +30,10 @@ import {
 }
 
 import {
-  to = aws_iam_policy.external_dns
-  id = "arn:aws:iam::659092511241:policy/ExternalDNSPolicy"
-}
-
-import {
-  to = aws_iam_policy.efs_csi_driver_policy
-  id = "arn:aws:iam::659092511241:policy/EFSCSIDriverPolicy"
-}
-
-import {
-  to = aws_ecr_repository.workspace_controller
-  id = "workspace-controller"
-}
-
-import {
-  to = aws_ecr_repository.workspace_images
-  id = "workspace-images"
-}
-
-import {
-  to = aws_iam_policy.cert_manager_route53
-  id = "arn:aws:iam::659092511241:policy/CertManagerRoute53Policy"
-}
-
-import {
   to = aws_eks_cluster.workspace_cluster
   id = "workspace-cluster"
 }
 
-import {
-  to = aws_iam_policy.ecr_limited_access
-  id = "arn:aws:iam::659092511241:policy/ECRLimitedAccessPolicy"
-}
-
-import {
-  to = aws_iam_role.external_dns_role
-  id = "external-dns-role"
-}
-
-import {
-  to = aws_iam_role.efs_csi_driver_role
-  id = "efs-csi-driver-role"
-}
-
-import {
-  to = aws_iam_role.cert_manager_dns01_role
-  id = "cert-manager-dns01-role"
-}
-
-import {
-  to = aws_iam_role.workspace_controller_role
-  id = "workspace-controller-role"
-}
 
 provider "aws" {
   region = var.aws_region
