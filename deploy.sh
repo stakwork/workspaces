@@ -10,24 +10,17 @@ unset AWS_REGION
 unset AWS_HOSTED_ZONE_ID
 
 # Load environment variables from .env
-declare -A envVars
 if [[ -f ".env" ]]; then
     while IFS='=' read -r key value; do
         [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
         key=$(echo "$key" | xargs)
         value=$(echo "$value" | sed 's/^"\(.*\)"$/\1/' | xargs)
         export "$key"="$value"
-        envVars[$key]=$value
     done < .env
 else
     echo ".env file not found!"
     exit 1
 fi
-
-echo "Loaded env vars:"
-for key in "${!envVars[@]}"; do
-    echo "$key = ${envVars[$key]}"
-done
 
 # Replace placeholders in Kubernetes YAML files
 filesToProcess=(
