@@ -3,6 +3,7 @@ Remove-Item Env:AWS_ACCESS_KEY_ID -ErrorAction SilentlyContinue
 Remove-Item Env:AWS_SECRET_ACCESS_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:AWS_PROFILE -ErrorAction SilentlyContinue
 Remove-Item Env:AWS_REGION -ErrorAction SilentlyContinue
+Remove-Item Env:AWS_HOSTED_ZONE_ID -ErrorAction SilentlyContinue
 
 # Load .env variables
 $envVars = @{}
@@ -30,6 +31,7 @@ $filesToProcess = @(
     "kubernetes/core/workspace-domain-settings.yaml",
     "kubernetes/core/workspace-ingress-admin.yaml",
     "kubernetes/port_detector/port-detector-configmap.yaml"
+    "kubernetes/core/workspace-cluster-issuer.yaml"
 )
 
 foreach ($file in $filesToProcess) {

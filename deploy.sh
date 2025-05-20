@@ -7,6 +7,7 @@ unset AWS_ACCESS_KEY_ID
 unset AWS_SECRET_ACCESS_KEY
 unset AWS_PROFILE
 unset AWS_REGION
+unset AWS_HOSTED_ZONE_ID
 
 # Load environment variables from .env
 declare -A envVars
@@ -34,6 +35,7 @@ filesToProcess=(
     "kubernetes/core/workspace-domain-settings.yaml"
     "kubernetes/core/workspace-ingress-admin.yaml"
     "kubernetes/port_detector/port-detector-configmap.yaml"
+    "kubernetes/core/workspace-cluster-issuer.yaml"
 )
 
 for file in "${filesToProcess[@]}"; do
