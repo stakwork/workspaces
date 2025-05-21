@@ -1,17 +1,11 @@
-# Clear any existing environment variables to ensure fresh loading
-$envVarsToRemove = @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_PROFILE', 'AWS_REGION', 'AWS_HOSTED_ZONE_ID')
-foreach ($var in $envVarsToRemove) {
-    Remove-Item "Env:$var" -ErrorAction SilentlyContinue
-    [System.Environment]::SetEnvironmentVariable($var, $null, "Process")
-}
-
-# Load .env variables
+# === Load .env variables into $envVars and environment ===
 $envVars = @{}
+
 if (Test-Path ".env") {
     Get-Content .env | ForEach-Object {
         if ($_ -match "^\s*([^#][^=]*)=(.*)$") {
             $key = $matches[1].Trim()
-            $value = $matches[2].Trim().Trim('"')  # Trim extra quotes if present
+            $value = $matches[2].Trim().Trim('"')  # Remove quotes if any
             $envVars[$key] = $value
             [System.Environment]::SetEnvironmentVariable($key, $value, "Process")
         }
@@ -21,40 +15,53 @@ if (Test-Path ".env") {
     exit 1
 }
 
-# Print a few for verification
 Write-Host "Loaded env vars:"
 $envVars.GetEnumerator() | ForEach-Object { Write-Host "$($_.Key) = $($_.Value)" }
 
-# Replace placeholders in kubernetes files
-$filesToProcess = @(
-    "kubernetes/core/workspace-certs.yaml",
-    "kubernetes/core/workspace-domain-settings.yaml",
-    "kubernetes/core/workspace-ingress-admin.yaml",
-    "kubernetes/port_detector/port-detector-configmap.yaml",
-    "kubernetes/core/workspace-cluster-issuer.yaml",
-    "kubernetes/workspace_controller/k8s/deployment.yaml"
-)
+# === Define function to expand template variables ===
+function Expand-TemplateString {
+    param (
+        [string]$content,
+        [hashtable]$variables
+    )
 
-# Convert relative paths to absolute paths
-$filesToProcess = $filesToProcess | ForEach-Object {
-    Join-Path -Path $PSScriptRoot -ChildPath $_
+    foreach ($key in $variables.Keys) {
+        $placeholder = "\$\{$key\}"  # Match ${KEY}
+        $value = [Regex]::Escape($variables[$key])
+        $content = [regex]::Replace($content, $placeholder, $value)
+    }
+
+    return $content
 }
 
-foreach ($file in $filesToProcess) {
+# === Process YAML templates in kubernetes/core ===
+$templatesDir = "kubernetes/core"
+$templates = Get-ChildItem -Path $templatesDir -Filter *.yaml
+
+foreach ($template in $templates) {
     try {
-        if (Test-Path $file) {
-            $content = Get-Content -Path $file -Raw -ErrorAction Stop
-            foreach ($key in $envVars.Keys) {
-                $pattern = "\{$($key)\}"  # Matches {DOMAIN}
-                $content = $content -replace $pattern, $envVars[$key]
-            }
-            Set-Content -Path $file -Value $content -Encoding UTF8 -Force
-            Write-Host "Processed $file"
-        } else {
-            Write-Host "File not found: $file"
-        }
+        $content = Get-Content -Path $template.FullName -Raw
+        $expandedContent = Expand-TemplateString -content $content -variables $envVars
+        Set-Content -Path $template.FullName -Value $expandedContent -Encoding UTF8 -Force
+        Write-Host "Processed $($template.Name)"
     } catch {
-        Write-Host "Error processing file $file"
+        Write-Host "Error processing template $($template.Name): $_"
+        exit 1
+    }
+}
+
+# === Process YAML templates in kubernetes/port_detector ===
+$portDetectorDir = "kubernetes/port_detector"
+$portDetectorTemplates = Get-ChildItem -Path $portDetectorDir -Filter *.yaml
+
+foreach ($template in $portDetectorTemplates) {
+    try {
+        $content = Get-Content -Path $template.FullName -Raw
+        $expandedContent = Expand-TemplateString -content $content -variables $envVars
+        Set-Content -Path $template.FullName -Value $expandedContent -Encoding UTF8 -Force
+        Write-Host "Processed $($template.Name)"
+    } catch {
+        Write-Host "Error processing template $($template.Name): $_"
         exit 1
     }
 }
@@ -148,7 +155,7 @@ metadata:
 provisioner: efs.csi.aws.com
 parameters:
   provisioningMode: efs-ap
-  fileSystemId: $EFS_ID
+  fileSystemId: ${EFS_ID}
   directoryPerms: "700"
 "@
 try {

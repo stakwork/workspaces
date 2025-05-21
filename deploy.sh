@@ -1,47 +1,37 @@
 #!/bin/bash
 
-set -e  # Exit immediately if a command exits with a non-zero status
+# Load environment variables from .env file
+source .env
 
-# Clear AWS-related environment variables
-unset AWS_ACCESS_KEY_ID
-unset AWS_SECRET_ACCESS_KEY
-unset AWS_PROFILE
-unset AWS_REGION
-unset AWS_HOSTED_ZONE_ID
+# Process Kubernetes templates
+TEMPLATES_DIR="kubernetes/core"
+TEMPLATES=$(find "$TEMPLATES_DIR" -type f -name "*.yaml")
 
-# Load environment variables from .env
-if [[ -f ".env" ]]; then
-    while IFS='=' read -r key value; do
-        [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
-        key=$(echo "$key" | xargs)
-        value=$(echo "$value" | sed 's/^"\(.*\)"$/\1/' | xargs)
-        export "$key"="$value"
-    done < .env
-else
-    echo ".env file not found!"
-    exit 1
-fi
-
-# Replace placeholders in Kubernetes YAML files
-filesToProcess=(
-    "kubernetes/core/workspace-certs.yaml"
-    "kubernetes/core/workspace-domain-settings.yaml"
-    "kubernetes/core/workspace-ingress-admin.yaml"
-    "kubernetes/port_detector/port-detector-configmap.yaml"
-)
-
-for file in "${filesToProcess[@]}"; do
-    if [[ -f "$file" ]]; then
-        content=$(cat "$file")
-        for key in "${!envVars[@]}"; do
-            content=${content//\{$key\}/${envVars[$key]}}
-        done
-        echo "$content" > "$file"
-        echo "Processed $file"
-    else
-        echo "File not found: $file"
-    fi
+for TEMPLATE in $TEMPLATES; do
+  echo "Processing $TEMPLATE..."
+  envsubst < "$TEMPLATE" > "$TEMPLATE.tmp"
+  mv "$TEMPLATE.tmp" "$TEMPLATE"
+  echo "Processed $TEMPLATE"
 done
+
+TEMPLATES_DIR="kubernetes/port_detector"
+TEMPLATES=$(find "$TEMPLATES_DIR" -type f -name "*.yaml")
+
+for TEMPLATE in $TEMPLATES; do
+  echo "Processing $TEMPLATE..."
+  envsubst < "$TEMPLATE" > "$TEMPLATE.tmp"
+  mv "$TEMPLATE.tmp" "$TEMPLATE"
+  echo "Processed $TEMPLATE"
+done
+
+# Create/Update ConfigMap
+echo "Creating/Updating ConfigMap..."
+kubectl apply -f kubernetes/config/configmap.yaml
+
+# Create/Update Secrets
+echo "Creating/Updating Secrets..."
+kubectl apply -f kubernetes/config/secrets.yaml
+
 
 # Check AWS CLI
 aws sts get-caller-identity
@@ -139,7 +129,7 @@ metadata:
 provisioner: efs.csi.aws.com
 parameters:
   provisioningMode: efs-ap
-  fileSystemId: $EFS_ID
+  fileSystemId: ${EFS_ID}
   directoryPerms: "700"
 EOF
 
