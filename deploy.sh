@@ -58,11 +58,11 @@ cd ..
 echo "Step 2: Getting Terraform outputs..."
 EFS_ID=$(terraform -chdir=terraform output -raw efs_id)
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
-AWS_REGION=${envVars["AWS_REGION"]:-us-east-1}
+REGION=${envVars["REGION"]:-us-east-1}
 
 # Step 3: Configure kubectl
 echo "Step 3: Configuring kubectl..."
-aws eks update-kubeconfig --region "$AWS_REGION" --name workspace-cluster
+aws eks update-kubeconfig --region "$REGION" --name workspace-cluster
 
 # Step 4: Create namespaces
 echo "Step 4: Creating namespaces..."
