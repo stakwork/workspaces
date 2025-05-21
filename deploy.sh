@@ -28,7 +28,6 @@ filesToProcess=(
     "kubernetes/core/workspace-domain-settings.yaml"
     "kubernetes/core/workspace-ingress-admin.yaml"
     "kubernetes/port_detector/port-detector-configmap.yaml"
-    "kubernetes/core/workspace-cluster-issuer.yaml"
 )
 
 for file in "${filesToProcess[@]}"; do
@@ -78,7 +77,31 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/
 # Step 6: Apply Kubernetes core configs
 echo "Step 6: Applying Kubernetes configurations..."
 kubectl apply -f kubernetes/core/workspace-certs.yaml
-kubectl apply -f kubernetes/core/workspace-cluster-issuer.yaml
+
+# Step 6.1: Update cluster issuer with the correct values
+echo "Step 6.1: Updating ClusterIssuer configuration..."
+cat <<EOF > ./kubernetes/core/workspace-cluster-issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-dns01
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: gonzaloaune@stakwork.com
+    privateKeySecretRef:
+      name: letsencrypt-dns01-account-key
+    solvers:
+    - dns01:
+        route53:
+          region: ${AWS_REGION}
+          hostedZoneID: ${AWS_HOSTED_ZONE_ID}
+EOF
+
+# Apply the ClusterIssuer configuration
+echo "Step 6.1: Applying ClusterIssuer configuration..."
+kubectl apply -f ./kubernetes/core/workspace-cluster-issuer.yaml
+
 kubectl apply -f kubernetes/core/workspace-cluster-role-binding.yaml
 kubectl apply -f kubernetes/core/workspace-domain-settings.yaml
 kubectl apply -f kubernetes/core/workspace-ingress-admin.yaml
