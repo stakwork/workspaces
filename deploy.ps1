@@ -31,7 +31,8 @@ $filesToProcess = @(
     "kubernetes/core/workspace-domain-settings.yaml",
     "kubernetes/core/workspace-ingress-admin.yaml",
     "kubernetes/port_detector/port-detector-configmap.yaml",
-    "kubernetes/core/workspace-cluster-issuer.yaml"
+    "kubernetes/core/workspace-cluster-issuer.yaml",
+    "kubernetes/workspace_controller/k8s/deployment.yaml"
 )
 
 # Convert relative paths to absolute paths
@@ -80,11 +81,11 @@ Pop-Location
 Write-Host "Step 2: Getting Terraform outputs..."
 $EFS_ID = (terraform output -raw efs_id)
 $AWS_ACCOUNT_ID = (aws sts get-caller-identity --query "Account" --output text)
-
+$AWS_REGION = (aws configure get region)
 
 # Step 3: Configure kubectl
 Write-Host "Step 3: Configuring kubectl..."
-$kubeconfig_command = "aws eks update-kubeconfig --region us-east-1 --name workspace-cluster"
+$kubeconfig_command = "aws eks update-kubeconfig --region $AWS_REGION --name workspace-cluster"
 $kubeconfig_command | Invoke-Expression
 
 # Step 4: Create namespaces
@@ -233,8 +234,8 @@ spec:
         - containerPort: 3000
 "@
 
-$deploymentContent | Out-File -FilePath ".\workspace_controller\k8s\deployment.yaml" -Encoding UTF8
-Set-Location ..
+$deploymentContent | Out-File -FilePath ".\kubernetes\workspace_controller\k8s\deployment.yaml" -Encoding UTF8
+Set-Location .
 
 
 # Step 15: Verify deployment

@@ -18,23 +18,6 @@ terraform {
   required_version = ">= 1.0"
 }
 
-import {
-  to = aws_iam_role.eks_cluster_role
-  id = "eks-cluster-role"
-}
-
-
-import {
-  to = aws_efs_file_system.workspace_efs
-  id = "fs-0ea50a894517141ff"
-}
-
-import {
-  to = aws_eks_cluster.workspace_cluster
-  id = "workspace-cluster"
-}
-
-
 provider "aws" {
   region = var.aws_region
 }
