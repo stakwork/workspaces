@@ -58,11 +58,11 @@ cd ..
 echo "Step 2: Getting Terraform outputs..."
 EFS_ID=$(terraform -chdir=terraform output -raw efs_id)
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
-REGION=${envVars["REGION"]:-us-east-1}
+AWS_REGION=${envVars["AWS_REGION"]:-us-east-1}
 
 # Step 3: Configure kubectl
 echo "Step 3: Configuring kubectl..."
-aws eks update-kubeconfig --region "$REGION" --name workspace-cluster
+aws eks update-kubeconfig --region "$AWS_REGION" --name workspace-cluster
 
 # Step 4: Create namespaces
 echo "Step 4: Creating namespaces..."
@@ -102,6 +102,9 @@ helm repo update
 helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
     --namespace ingress-nginx \
     --set controller.service.type=LoadBalancer
+
+# Step 8: Install EFS CSI Driver
+kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"
 
 # Step 9: Create EFS StorageClass
 echo "Step 9: Creating EFS StorageClass..."
@@ -166,7 +169,6 @@ kubectl get pods,svc,ingress -n workspace-system
 echo "Deployment completed!"
 echo "Starting port-forwarding..."
 
-kubectl port-forward -n workspace-system svc/workspace-controller 3000:3000 &
 kubectl port-forward -n workspace-system svc/workspace-ui 8080:80 &
 
 echo "Access your application at:"

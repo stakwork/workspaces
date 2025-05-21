@@ -1,9 +1,9 @@
 # Clear any existing environment variables to ensure fresh loading
-Remove-Item Env:AWS_ACCESS_KEY_ID -ErrorAction SilentlyContinue
-Remove-Item Env:AWS_SECRET_ACCESS_KEY -ErrorAction SilentlyContinue
-Remove-Item Env:AWS_PROFILE -ErrorAction SilentlyContinue
-Remove-Item Env:AWS_REGION -ErrorAction SilentlyContinue
-Remove-Item Env:AWS_HOSTED_ZONE_ID -ErrorAction SilentlyContinue
+$envVarsToRemove = @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_PROFILE', 'AWS_REGION', 'AWS_HOSTED_ZONE_ID')
+foreach ($var in $envVarsToRemove) {
+    Remove-Item "Env:$var" -ErrorAction SilentlyContinue
+    [System.Environment]::SetEnvironmentVariable($var, $null, "Process")
+}
 
 # Load .env variables
 $envVars = @{}
@@ -30,21 +30,31 @@ $filesToProcess = @(
     "kubernetes/core/workspace-certs.yaml",
     "kubernetes/core/workspace-domain-settings.yaml",
     "kubernetes/core/workspace-ingress-admin.yaml",
-    "kubernetes/port_detector/port-detector-configmap.yaml"
+    "kubernetes/port_detector/port-detector-configmap.yaml",
     "kubernetes/core/workspace-cluster-issuer.yaml"
 )
 
+# Convert relative paths to absolute paths
+$filesToProcess = $filesToProcess | ForEach-Object {
+    Join-Path -Path $PSScriptRoot -ChildPath $_
+}
+
 foreach ($file in $filesToProcess) {
-    if (Test-Path $file) {
-        $content = Get-Content -Path $file -Raw
-        foreach ($key in $envVars.Keys) {
-            $pattern = "\{$($key)\}"  # Matches {DOMAIN}
-            $content = $content -replace $pattern, $envVars[$key]  # No escaping
+    try {
+        if (Test-Path $file) {
+            $content = Get-Content -Path $file -Raw -ErrorAction Stop
+            foreach ($key in $envVars.Keys) {
+                $pattern = "\{$($key)\}"  # Matches {DOMAIN}
+                $content = $content -replace $pattern, $envVars[$key]
+            }
+            Set-Content -Path $file -Value $content -Encoding UTF8 -Force
+            Write-Host "Processed $file"
+        } else {
+            Write-Host "File not found: $file"
         }
-        Set-Content -Path $file -Value $content
-        Write-Host "Processed $file"
-    } else {
-        Write-Host "File not found: $file"
+    } catch {
+        Write-Host "Error processing file $file"
+        exit 1
     }
 }
 
@@ -54,10 +64,17 @@ aws sts get-caller-identity
 
 # Step 1: Initialize and Apply Terraform
 Write-Host "Step 1: Initializing and applying Terraform..."
-Set-Location terraform
-terraform init
-terraform apply
-Set-Location ..
+$terraformPath = Join-Path -Path $PSScriptRoot -ChildPath "terraform"
+Push-Location -Path $terraformPath
+try {
+    terraform init
+    terraform apply -auto-approve
+} catch {
+    Write-Error "Error during Terraform operations: $_"
+    Pop-Location
+    exit 1
+}
+Pop-Location
 
 # Step 2: Get Terraform outputs
 Write-Host "Step 2: Getting Terraform outputs..."
@@ -116,9 +133,13 @@ helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx `
     --set controller.service.type=LoadBalancer
 
 
-# Step 9: Create EFS StorageClass
-Write-Host "Step 9: Creating EFS StorageClass..."
-@"
+# Step 9: Install EFS CSI Driver
+kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"
+
+# Step 10: Create EFS StorageClass
+Write-Host "Step 10: Creating EFS StorageClass..."
+$storageClassPath = Join-Path -Path $PSScriptRoot -ChildPath "kubernetes/core/storage-class.yaml"
+$storageClassContent = @"
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
 metadata:
@@ -128,11 +149,16 @@ parameters:
   provisioningMode: efs-ap
   fileSystemId: $EFS_ID
   directoryPerms: "700"
-"@ | Out-File -FilePath "./kubernetes/core/storage-class.yaml" -Encoding UTF8
-kubectl apply -f ./kubernetes/core/storage-class.yaml
+"@
+try {
+    $storageClassContent | Out-File -FilePath $storageClassPath -Encoding UTF8 -Force
+    kubectl apply -f $storageClassPath
+} catch {
+    Write-Error "Error creating storage class: $_"
+}
 
-# Step 10: Update deployment.yaml with correct image
-Write-Host "Step 10: Updating deployment configuration..."
+# Step 11: Update deployment.yaml with correct image
+Write-Host "Step 11: Updating deployment configuration..."
 $deploymentContent = @"
 apiVersion: apps/v1
 kind: Deployment
@@ -159,23 +185,30 @@ spec:
 
 $deploymentContent | Out-File -FilePath ".\kubernetes\workspace_controller\k8s\deployment.yaml" -Encoding UTF8
 
-# Step 11: Deploy Controller components
-Write-Host "Step 11: Deploying Controller components..."
+# Step 12: Deploy Controller components
+Write-Host "Step 12: Deploying Controller components..."
 kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
 
-# Step 12: Build and push Docker image
-Write-Host "Step 12: Building and pushing Docker image..."
-Set-Location .\kubernetes\workspace_controller
-aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-docker build -t workspace-controller .
-docker tag workspace-controller:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/workspace-controller:latest"
-docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/workspace-controller:latest"
-Set-Location ..
+# Step 13: Build and push Docker image
+Write-Host "Step 13: Building and pushing Docker image..."
+$controllerPath = Join-Path -Path $PSScriptRoot -ChildPath "kubernetes/workspace_controller"
+Push-Location -Path $controllerPath
+try {
+    aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+    docker build -t workspace-controller .
+    docker tag workspace-controller:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/workspace-controller:latest"
+    docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/workspace-controller:latest"
+} catch {
+    Write-Error "Error during Docker operations: $_"
+    Pop-Location
+    exit 1
+}
+Pop-Location
 
 
 
-# Step 13: Verify deployment
-Write-Host "Step 13: Verifying deployment..."
+# Step 14: Verify deployment
+Write-Host "Step 14: Verifying deployment..."
 $deploymentContent = @"
 apiVersion: apps/v1
 kind: Deployment
@@ -204,8 +237,8 @@ $deploymentContent | Out-File -FilePath ".\workspace_controller\k8s\deployment.y
 Set-Location ..
 
 
-# Step 14: Verify deployment
-Write-Host "Step 14: Verifying deployment..."
+# Step 15: Verify deployment
+Write-Host "Step 15: Verifying deployment..."
 kubectl get pods,svc,ingress -n workspace-system
 
 # Final Step: Display access information
