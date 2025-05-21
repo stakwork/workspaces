@@ -1,27 +1,32 @@
 #!/bin/bash
 
 # Load environment variables from .env file
+set -a
 source .env
+set +a
 
-# Process Kubernetes templates
-TEMPLATES_DIR="kubernetes/core"
-TEMPLATES=$(find "$TEMPLATES_DIR" -type f -name "*.yaml")
+# Define specific template directories to process
+TEMPLATE_DIRS=(
+  "kubernetes/base/config"
+  "kubernetes/base/ingress"
+  "kubernetes/base/service-accounts"
+  "kubernetes/cert-manager"
 
-for TEMPLATE in $TEMPLATES; do
-  echo "Processing $TEMPLATE..."
-  envsubst < "$TEMPLATE" > "$TEMPLATE.tmp"
-  mv "$TEMPLATE.tmp" "$TEMPLATE"
-  echo "Processed $TEMPLATE"
-done
+  # Add more directories here as needed
+)
 
-TEMPLATES_DIR="kubernetes/port_detector"
-TEMPLATES=$(find "$TEMPLATES_DIR" -type f -name "*.yaml")
+# Process templates in each specified directory
+for TEMPLATES_DIR in "${TEMPLATE_DIRS[@]}"; do
+  echo "Processing templates in $TEMPLATES_DIR..."
 
-for TEMPLATE in $TEMPLATES; do
-  echo "Processing $TEMPLATE..."
-  envsubst < "$TEMPLATE" > "$TEMPLATE.tmp"
-  mv "$TEMPLATE.tmp" "$TEMPLATE"
-  echo "Processed $TEMPLATE"
+  TEMPLATES=$(find "$TEMPLATES_DIR" -type f -name "*.yaml")
+
+  for TEMPLATE in $TEMPLATES; do
+    echo "  Processing $TEMPLATE..."
+    envsubst < "$TEMPLATE" > "$TEMPLATE.tmp"
+    mv "$TEMPLATE.tmp" "$TEMPLATE"
+    echo "  Processed $TEMPLATE"
+  done
 done
 
 # Create/Update ConfigMap
@@ -88,25 +93,29 @@ spec:
           hostedZoneID: ${AWS_HOSTED_ZONE_ID}
 EOF
 
-# Apply the ClusterIssuer configuration
-echo "Step 6.1: Applying ClusterIssuer configuration..."
-kubectl apply -f ./kubernetes/core/workspace-cluster-issuer.yaml
+# Apply cert-manager resources
+echo "Step 6.1: Applying cert-manager resources..."
+kubectl apply -f ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml
+kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert.yaml
 
-kubectl apply -f kubernetes/core/workspace-cluster-role-binding.yaml
-kubectl apply -f kubernetes/core/workspace-domain-settings.yaml
-kubectl apply -f kubernetes/core/workspace-ingress-admin.yaml
-kubectl apply -f kubernetes/core/workspace-rbac-permissions.yaml
-kubectl apply -f kubernetes/core/workspace-read-node.yaml
-kubectl apply -f kubernetes/core/workspace-registry-admin.yaml
-kubectl apply -f kubernetes/core/workspace-registry-service-account.yaml
-kubectl apply -f kubernetes/core/workspace-registry-tls.yaml
-kubectl apply -f kubernetes/core/workspace-registry.yaml
-kubectl apply -f kubernetes/core/workspace-service-account.yaml
-kubectl apply -f kubernetes/core/workspace-ui.yaml
+# Apply base components
+echo "Step 6.2: Applying base components..."
+kubectl apply -f ./kubernetes/base/cluster-roles/workspace-cluster-role-binding.yaml
+kubectl apply -f ./kubernetes/base/config/workspace-domain-settings.yaml
+kubectl apply -f ./kubernetes/base/ingress/workspace-ingress-admin.yaml
+kubectl apply -f ./kubernetes/base/rbac/workspace-rbac-permissions.yaml
+kubectl apply -f ./kubernetes/base/rbac/workspace-read-node.yaml
+kubectl apply -f ./kubernetes/base/rbac/workspace-registry-admin.yaml
+kubectl apply -f ./kubernetes/base/service-accounts/workspace-registry-service-account.yaml
+kubectl apply -f ./kubernetes/base/tls/workspace-registry-tls.yaml
+kubectl apply -f ./kubernetes/base/apps/workspace-registry.yaml
+kubectl apply -f ./kubernetes/base/service-accounts/workspace-service-account.yaml
+kubectl apply -f ./kubernetes/base/apps/workspace-ui.yaml
 
 # Step 7: Port detector
-kubectl apply -f kubernetes/port_detector/port-detector-configmap.yaml
-kubectl apply -f kubernetes/port_detector/port-detector-rbac.yaml
+echo "Step 7: Applying port detector configurations..."
+kubectl apply -f ./kubernetes/port_detector/port-detector-configmap.yaml
+kubectl apply -f ./kubernetes/port_detector/port-detector-rbac.yaml
 
 # Step 8: Install NGINX Ingress
 echo "Step 8: Installing Nginx Ingress Controller..."
@@ -121,7 +130,7 @@ kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernete
 
 # Step 9: Create EFS StorageClass
 echo "Step 9: Creating EFS StorageClass..."
-cat <<EOF > ./kubernetes/core/storage-class.yaml
+cat <<EOF > ./kubernetes/storage/storage-class.yaml
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
 metadata:
@@ -133,7 +142,7 @@ parameters:
   directoryPerms: "700"
 EOF
 
-kubectl apply -f ./kubernetes/core/storage-class.yaml
+kubectl apply -f ./kubernetes/storage/storage-class.yaml
 
 # Step 10: Update deployment image
 echo "Step 10: Updating deployment configuration..."

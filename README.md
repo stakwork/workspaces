@@ -61,8 +61,12 @@ The deployment script:
 ├── deploy.sh           # Bash deployment script
 ├── docs/               # Documentation
 ├── kubernetes/         # Kubernetes manifests
-│   ├── core/          # Core Kubernetes resources
+│   ├── base/          # Base Kubernetes configuration
+│   ├── cert-manager/  # Certificate management
+│   ├── config/        # Configuration files
 │   ├── port_detector/ # Port detection service
+│   ├── scripts/       # Kubernetes deployment scripts
+│   ├── storage/       # Storage configuration
 │   └── workspace_controller/ # Workspace management controller
 ├── terraform/         # Terraform infrastructure code
 └── .terraform/        # Terraform state and cache

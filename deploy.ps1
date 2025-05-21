@@ -1,68 +1,28 @@
-# === Load .env variables into $envVars and environment ===
-$envVars = @{}
+# === Define template directories ===
+$templateDirs = @(
+    "kubernetes/core",
+    "kubernetes/port_detector"
+)
 
-if (Test-Path ".env") {
-    Get-Content .env | ForEach-Object {
-        if ($_ -match "^\s*([^#][^=]*)=(.*)$") {
-            $key = $matches[1].Trim()
-            $value = $matches[2].Trim().Trim('"')  # Remove quotes if any
-            $envVars[$key] = $value
-            [System.Environment]::SetEnvironmentVariable($key, $value, "Process")
+# === Process YAML templates in all defined directories ===
+foreach ($dir in $templateDirs) {
+    if (-Not (Test-Path $dir)) {
+        Write-Host "Directory not found: $dir"
+        continue
+    }
+
+    $templates = Get-ChildItem -Path $dir -Filter *.yaml
+
+    foreach ($template in $templates) {
+        try {
+            $content = Get-Content -Path $template.FullName -Raw
+            $expandedContent = Expand-TemplateString -content $content -variables $envVars
+            Set-Content -Path $template.FullName -Value $expandedContent -Encoding UTF8 -Force
+            Write-Host "Processed $($template.FullName)"
+        } catch {
+            Write-Host "Error processing template $($template.FullName): $_"
+            exit 1
         }
-    }
-} else {
-    Write-Host ".env file not found!"
-    exit 1
-}
-
-Write-Host "Loaded env vars:"
-$envVars.GetEnumerator() | ForEach-Object { Write-Host "$($_.Key) = $($_.Value)" }
-
-# === Define function to expand template variables ===
-function Expand-TemplateString {
-    param (
-        [string]$content,
-        [hashtable]$variables
-    )
-
-    foreach ($key in $variables.Keys) {
-        $placeholder = "\$\{$key\}"  # Match ${KEY}
-        $value = [Regex]::Escape($variables[$key])
-        $content = [regex]::Replace($content, $placeholder, $value)
-    }
-
-    return $content
-}
-
-# === Process YAML templates in kubernetes/core ===
-$templatesDir = "kubernetes/core"
-$templates = Get-ChildItem -Path $templatesDir -Filter *.yaml
-
-foreach ($template in $templates) {
-    try {
-        $content = Get-Content -Path $template.FullName -Raw
-        $expandedContent = Expand-TemplateString -content $content -variables $envVars
-        Set-Content -Path $template.FullName -Value $expandedContent -Encoding UTF8 -Force
-        Write-Host "Processed $($template.Name)"
-    } catch {
-        Write-Host "Error processing template $($template.Name): $_"
-        exit 1
-    }
-}
-
-# === Process YAML templates in kubernetes/port_detector ===
-$portDetectorDir = "kubernetes/port_detector"
-$portDetectorTemplates = Get-ChildItem -Path $portDetectorDir -Filter *.yaml
-
-foreach ($template in $portDetectorTemplates) {
-    try {
-        $content = Get-Content -Path $template.FullName -Raw
-        $expandedContent = Expand-TemplateString -content $content -variables $envVars
-        Set-Content -Path $template.FullName -Value $expandedContent -Encoding UTF8 -Force
-        Write-Host "Processed $($template.Name)"
-    } catch {
-        Write-Host "Error processing template $($template.Name): $_"
-        exit 1
     }
 }
 
@@ -113,21 +73,25 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/
 
 # Step 6: Apply Kubernetes configurations and deploy components
 Write-Host "Step 6: Applying Kubernetes configurations..."
-kubectl apply -f kubernetes/core/workspace-certs.yaml
-kubectl apply -f kubernetes/core/workspace-cluster-issuer.yaml
-kubectl apply -f kubernetes/core/workspace-cluster-role-binding.yaml
-kubectl apply -f kubernetes/core/workspace-domain-settings.yaml
-kubectl apply -f kubernetes/core/workspace-ingress-admin.yaml
-kubectl apply -f kubernetes/core/workspace-rbac-permissions.yaml
-kubectl apply -f kubernetes/core/workspace-read-node.yaml
-kubectl apply -f kubernetes/core/workspace-registry-admin.yaml
-kubectl apply -f kubernetes/core/workspace-registry-service-account.yaml
-kubectl apply -f kubernetes/core/workspace-registry-tls.yaml
-kubectl apply -f kubernetes/core/workspace-registry.yaml
-kubectl apply -f kubernetes/core/workspace-service-account.yaml
-kubectl apply -f kubernetes/core/workspace-ui.yaml
+# Apply cert-manager resources
+kubectl apply -f kubernetes/cert-manager/certificates/workspace-cert.yaml
+kubectl apply -f kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml
+
+# Apply base components
+kubectl apply -f kubernetes/base/cluster-roles/workspace-cluster-role-binding.yaml
+kubectl apply -f kubernetes/base/config/workspace-domain-settings.yaml
+kubectl apply -f kubernetes/base/ingress/workspace-ingress-admin.yaml
+kubectl apply -f kubernetes/base/rbac/workspace-rbac-permissions.yaml
+kubectl apply -f kubernetes/base/rbac/workspace-read-node.yaml
+kubectl apply -f kubernetes/base/rbac/workspace-registry-admin.yaml
+kubectl apply -f kubernetes/base/service-accounts/workspace-registry-service-account.yaml
+kubectl apply -f kubernetes/base/tls/workspace-registry-tls.yaml
+kubectl apply -f kubernetes/base/apps/workspace-registry.yaml
+kubectl apply -f kubernetes/base/service-accounts/workspace-service-account.yaml
+kubectl apply -f kubernetes/base/apps/workspace-ui.yaml
 
 # Step 7: Port detector
+Write-Host "Step 7: Applying port detector configurations..."
 kubectl apply -f kubernetes/port_detector/port-detector-rbac.yaml
 kubectl apply -f kubernetes/port_detector/port-detector-configmap.yaml
 
@@ -146,7 +110,7 @@ kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernete
 
 # Step 10: Create EFS StorageClass
 Write-Host "Step 10: Creating EFS StorageClass..."
-$storageClassPath = Join-Path -Path $PSScriptRoot -ChildPath "kubernetes/core/storage-class.yaml"
+$storageClassPath = Join-Path -Path $PSScriptRoot -ChildPath "kubernetes/storage/storage-class.yaml"
 $storageClassContent = @"
 kind: StorageClass
 apiVersion: storage.k8s.io/v1

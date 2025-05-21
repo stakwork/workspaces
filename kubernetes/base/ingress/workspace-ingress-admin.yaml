@@ -9,10 +9,10 @@ metadata:
 spec:
   tls:
   - hosts:
-    - {SUBDOMAIN_REPLACE_ME}
+    - ${SUBDOMAIN_REPLACE_ME}
     secretName: workspace-admin-tls
   rules:
-  - host: {SUBDOMAIN_REPLACE_ME}
+  - host: ${SUBDOMAIN_REPLACE_ME}
     http:
       paths:
       - path: /api
