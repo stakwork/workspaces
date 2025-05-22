@@ -124,7 +124,6 @@ helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
 helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
     --namespace ingress-nginx \
-    --set controller.service.type=LoadBalancer
 
 # Step 8: Install EFS CSI Driver
 kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"
