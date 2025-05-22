@@ -1,34 +1,99 @@
+# === Load environment variables from .env file ===
+$envFilePath = ".env"
+if (Test-Path $envFilePath) {
+    Get-Content $envFilePath | ForEach-Object {
+        if ($_ -match "^(?!#)([^=]+)=(.*)$") {
+            $envName = $matches[1].Trim()
+            $envValue = $matches[2].Trim()
+            [System.Environment]::SetEnvironmentVariable($envName, $envValue, [System.EnvironmentVariableTarget]::Process)
+        }
+    }
+    Write-Host "Environment variables loaded from .env file"
+} else {
+    Write-Host "No .env file found, skipping environment variable loading."
+}
+
 # === Define template directories ===
 $templateDirs = @(
-    "kubernetes/core",
+    "kubernetes/base/config",
+    "kubernetes/base/ingress",
+    "kubernetes/base/service-accounts",
+    "kubernetes/cert-manager/certificates",
+    "kubernetes/cert-manager/issuers",
     "kubernetes/port_detector"
 )
 
-# === Process YAML templates in all defined directories ===
-foreach ($dir in $templateDirs) {
-    if (-Not (Test-Path $dir)) {
-        Write-Host "Directory not found: $dir"
-        continue
+# === Function to replace variables in templates ===
+function Replace-VariablesInTemplate {
+    param(
+        [string]$templatePath
+    )
+
+    # Read the template content
+    $content = Get-Content -Path $templatePath -Raw
+
+    # Retrieve all environment variables
+    $envVars = [System.Environment]::GetEnvironmentVariables()
+
+    # Loop through each environment variable and perform the replacement
+    foreach ($key in $envVars.Keys) {
+        $pattern = "\$\{$key\}"  # Matches ${VAR}
+        $value = $envVars[$key]
+
+        # No need to escape value here (no escaping of periods)
+        # Replace all instances of ${key} with the value
+        $content = $content -replace $pattern, $value
     }
 
-    $templates = Get-ChildItem -Path $dir -Filter *.yaml
+    # Write the updated content back to the template file
+    Set-Content -Path $templatePath -Value $content -Encoding UTF8 -Force
+}
 
-    foreach ($template in $templates) {
-        try {
-            $content = Get-Content -Path $template.FullName -Raw
-            $expandedContent = Expand-TemplateString -content $content -variables $envVars
-            Set-Content -Path $template.FullName -Value $expandedContent -Encoding UTF8 -Force
-            Write-Host "Processed $($template.FullName)"
-        } catch {
-            Write-Host "Error processing template $($template.FullName): $_"
-            exit 1
+# === Process YAML templates in each specified directory ===
+foreach ($dir in $templateDirs) {
+    if (Test-Path $dir) {
+        Write-Host ""
+        Write-Host "Processing templates in $dir..."
+
+        # Get all *.yaml files in the directory
+        $templates = Get-ChildItem -Path $dir -Filter *.yaml
+        foreach ($template in $templates) {
+            Write-Host "  Replacing variables in $($template.Name)..."
+            Replace-VariablesInTemplate -templatePath $template.FullName
+            Write-Host "  Processed $($template.Name)"
         }
+    } else {
+        Write-Host "Directory not found: $dir"
     }
 }
 
+# === Apply all templates via kubectl ===
+Write-Host ""
+Write-Host "Applying processed Kubernetes YAML files..."
+foreach ($dir in $templateDirs) {
+    if (Test-Path $dir) {
+        kubectl apply -f $dir
+    }
+}
+
+# === Apply specific config and secrets ===
+Write-Host ""
+Write-Host "Creating/Updating ConfigMap and Secrets..."
+kubectl apply -f kubernetes/config/configmap.yaml
+kubectl apply -f kubernetes/config/secrets.yaml
+
+# === Verify deployment status ===
+Write-Host ""
+Write-Host "Verifying deployment status..."
+kubectl get deployments
+kubectl get pods
+
+Write-Host ""
+Write-Host "Deployment complete. Add your test commands below if needed."
 
 # Check if AWS CLI is working now
 aws sts get-caller-identity
+
 
 # Step 1: Initialize and Apply Terraform
 Write-Host "Step 1: Initializing and applying Terraform..."
