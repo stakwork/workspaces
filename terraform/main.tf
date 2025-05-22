@@ -70,9 +70,7 @@ resource "aws_subnet" "public" {
     "kubernetes.io/role/elb"                    = "1"
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+  
 }
 
 # Private subnets
