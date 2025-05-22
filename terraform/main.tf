@@ -69,6 +69,10 @@ resource "aws_subnet" "public" {
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
     "kubernetes.io/role/elb"                    = "1"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Private subnets
@@ -92,6 +96,12 @@ resource "aws_internet_gateway" "workspace_igw" {
   tags = {
     Name = "workspace-igw"
   }
+
+  depends_on = [
+    aws_nat_gateway.workspace_nat,
+    aws_eks_node_group.workspace_nodes,
+    aws_eks_cluster.workspace_cluster
+  ]
 }
 
 # Elastic IPs for NAT Gateways
@@ -114,7 +124,10 @@ resource "aws_nat_gateway" "workspace_nat" {
     Name = "workspace-nat-${count.index + 1}"
   }
 
-  depends_on = [aws_internet_gateway.workspace_igw]
+  depends_on = [
+    aws_eks_node_group.workspace_nodes,
+    aws_eks_cluster.workspace_cluster
+  ]
 }
 
 # Route table for public subnets
@@ -205,6 +218,10 @@ resource "aws_eks_node_group" "workspace_nodes" {
 
   tags = {
     Name = "workspace-node-group"
+  }
+
+  lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
   }
 }
 
