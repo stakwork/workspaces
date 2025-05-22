@@ -71,11 +71,11 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/
 
 # Step 6: Apply Kubernetes core configs
 echo "Step 6: Applying Kubernetes configurations..."
-kubectl apply -f kubernetes/core/workspace-certs.yaml
+kubectl apply -f kubernetes/cert-manager/certificates/workspace-certs.yaml
 
 # Step 6.1: Update cluster issuer with the correct values
 echo "Step 6.1: Updating ClusterIssuer configuration..."
-cat <<EOF > ./kubernetes/core/workspace-cluster-issuer.yaml
+cat <<EOF > ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -192,6 +192,7 @@ echo "Deployment completed!"
 echo "Starting port-forwarding..."
 
 kubectl port-forward -n workspace-system svc/workspace-ui 8080:80 &
+kubectl port-forward -n workspace-system svc/workspace-controller 3000:3000 &
 
 echo "Access your application at:"
 echo "API: http://localhost:3000"
