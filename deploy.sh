@@ -11,6 +11,7 @@ TEMPLATE_DIRS=(
   "kubernetes/base/ingress"
   "kubernetes/base/service-accounts"
   "kubernetes/cert-manager"
+  "kubernetes/port_detector"
 
   # Add more directories here as needed
 )

@@ -21,3 +21,40 @@ data:
   # Service account (FIXED)
   serviceAccountAnnotations: |
     eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/workspace-controller-role
+
+  # Namespaces (FIXED)
+  workspaceNamespace: "${WORKSPACE_NAMESPACE}"
+
+  # Pod network (FIXED)
+  podName: "${POD_NAME}"
+  podNamespace: "${POD_NAMESPACE}"
+  podIP: "${POD_IP}"
+  podServiceAccount: "${POD_SERVICE_ACCOUNT}"
+
+  # Container settings (FIXED)
+  containerName: "${CONTAINER_NAME}"
+  containers: "${CONTAINERS}"
+
+  # Code server settings (FIXED)
+  codeServerContainer: "${CODE_SERVER_CONTAINER}"
+
+  # CM Data (FIXED)
+  cmName: "${CM_NAME}"
+  cmData: "${CM_DATA}"
+  newCmData: "${NEW_CM_DATA}"
+
+  # Certificates (FIXED)
+  certsExist: "${CERTS_EXIST}"
+
+  # Ingress settings (FIXED)
+  ingressExist: "${INGRESS_EXIST}"
+
+  # Port settings (FIXED)
+  port: "${PORT}"
+  portName: "${PORT_NAME}"
+  portNumber: "${PORT_NUM}"
+  currentPorts: "${CURRENT_PORTS}"
+  netstatports: "${NETSTAT_PORTS}"
+  lsofports: "${LSOF_PORTS}"
+  ssports: "${SS_PORTS}"
+
