@@ -96,6 +96,7 @@ resource "aws_internet_gateway" "workspace_igw" {
   }
 
   depends_on = [
+    aws_eip.nat,
     aws_nat_gateway.workspace_nat,
     aws_eks_node_group.workspace_nodes,
     aws_eks_cluster.workspace_cluster
