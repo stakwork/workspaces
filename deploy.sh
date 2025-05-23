@@ -61,7 +61,7 @@ aws sts get-caller-identity
 echo "Step 1: Initializing and applying Terraform..."
 cd terraform
 terraform init
-terraform plan
+terraform plan -out=tfplan
 terraform apply -auto-approve
 cd ..
 
