@@ -65,23 +65,13 @@ To destroy the infrastructure provisioned by Terraform, navigate to the `terrafo
 cd terraform
 terraform destroy
 ```
+## Destruction scripts
 
-## Important: Destruction and Cleanup
-Before running
-
-```bash
-terraform destroy
-```
-make sure to run 
 ```bash
 bash aws_cleanup.sh
 ```
-script to properly clean up AWS resources. This script deletes the following resources:
-EC2 Elastic Network Interfaces (ENIs)
-EKS clusters and associated resources
-IGW & Other dependencies created during infrastructure setup
-### Warning: 
-Running permanently deletes these resources. Make sure to review the script and understand what resources will be deleted before running it.
+This script Helm release and perfoms terraform destroy
+
 
 ## Manual Cleanup (Optional)
 

@@ -167,7 +167,7 @@ data:
               echo "Detected ports locally with lsof: $CURRENT_PORTS"
             else
               echo "Checking ports with ss..."
-              SS_PORTS=$(ss -tunlp 2>/dev/null | grep LISTEN | grep -v 127.0.0.1 | awk '{print $5}' | awk -F: '{print $$NF}' | sort -n | uniq)
+              SS_PORTS=$(ss -tunlp 2>/dev/null | grep LISTEN | grep -v 127.0.0.1 | awk '{print $5}' | awk -F: '{print $NF}' | sort -n | uniq)
               
               if [ -n "$SS_PORTS" ]; then
                 CURRENT_PORTS="$SS_PORTS"
