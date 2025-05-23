@@ -5,32 +5,47 @@ set -a
 source .env
 set +a
 
-# Define specific template directories to process
+# Directories where all environment variables should be replaced
 TEMPLATE_DIRS=(
-  "kubernetes/base/config"
   "kubernetes/base/ingress"
   "kubernetes/base/service-accounts"
   "kubernetes/cert-manager"
-  "kubernetes/port_detector"
-
   # Add more directories here as needed
 )
 
-# Process templates in each specified directory
+# Path to the file where only SUBDOMAIN_REPLACE_ME should be replaced
+PARTIAL_ENV_TEMPLATE="kubernetes/port_detector/port-detector-configmap.yaml"
+
+# Step 1: Replace all variables in templates (excluding the partial one)
 for TEMPLATES_DIR in "${TEMPLATE_DIRS[@]}"; do
-  echo "Processing templates in $TEMPLATES_DIR..."
+  echo "Processing templates in $TEMPLATES_DIR (all variables)..."
 
   TEMPLATES=$(find "$TEMPLATES_DIR" -type f -name "*.yaml")
 
   for TEMPLATE in $TEMPLATES; do
-    echo "  Processing $TEMPLATE..."
+    if [[ "$TEMPLATE" == "$PARTIAL_ENV_TEMPLATE" ]]; then
+      echo "  Skipping $TEMPLATE (only SUBDOMAIN_REPLACE_ME will be replaced later)"
+      continue
+    fi
+
+    echo "  Processing $TEMPLATE with full envsubst..."
     envsubst < "$TEMPLATE" > "$TEMPLATE.tmp"
     mv "$TEMPLATE.tmp" "$TEMPLATE"
     echo "  Processed $TEMPLATE"
   done
 done
 
-# Create/Update ConfigMap
+# Step 2: Replace only SUBDOMAIN_REPLACE_ME in the specific file
+if [ -f "$PARTIAL_ENV_TEMPLATE" ]; then
+  echo "Processing $PARTIAL_ENV_TEMPLATE (only SUBDOMAIN_REPLACE_ME)..."
+  envsubst '${SUBDOMAIN_REPLACE_ME}' < "$PARTIAL_ENV_TEMPLATE" > "$PARTIAL_ENV_TEMPLATE.tmp"
+  mv "$PARTIAL_ENV_TEMPLATE.tmp" "$PARTIAL_ENV_TEMPLATE"
+  echo "Processed $PARTIAL_ENV_TEMPLATE"
+else
+  echo "Warning: File not found - $PARTIAL_ENV_TEMPLATE"
+fi
+
+# Step 3: Apply the main configmap
 echo "Creating/Updating ConfigMap..."
 kubectl apply -f kubernetes/config/configmap.yaml
 
@@ -46,6 +61,7 @@ aws sts get-caller-identity
 echo "Step 1: Initializing and applying Terraform..."
 cd terraform
 terraform init
+terraform plan
 terraform apply -auto-approve
 cd ..
 
@@ -124,6 +140,7 @@ helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
 helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
     --namespace ingress-nginx \
+    --set controller.service.type=LoadBalancer
 
 # Step 8: Install EFS CSI Driver
 kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"

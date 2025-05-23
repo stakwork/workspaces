@@ -11,7 +11,7 @@ data:
     set -x
     
     NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
-    WORKSPACE_DOMAIN="${SUBDOMAIN_REPLACE_ME}.${WORKSPACE_DOMAIN}"
+    WORKSPACE_DOMAIN="${SUBDOMAIN_REPLACE_ME}"
 
     echo "Waiting for services to initialise..."
     sleep 30
