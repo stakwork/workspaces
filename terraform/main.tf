@@ -69,8 +69,6 @@ resource "aws_subnet" "public" {
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
     "kubernetes.io/role/elb"                    = "1"
   }
-
-  
 }
 
 # Private subnets
@@ -94,13 +92,6 @@ resource "aws_internet_gateway" "workspace_igw" {
   tags = {
     Name = "workspace-igw"
   }
-
-  depends_on = [
-    aws_eip.nat,
-    aws_nat_gateway.workspace_nat,
-    aws_eks_node_group.workspace_nodes,
-    aws_eks_cluster.workspace_cluster
-  ]
 }
 
 # Elastic IPs for NAT Gateways
@@ -123,10 +114,7 @@ resource "aws_nat_gateway" "workspace_nat" {
     Name = "workspace-nat-${count.index + 1}"
   }
 
-  depends_on = [
-    aws_eks_node_group.workspace_nodes,
-    aws_eks_cluster.workspace_cluster
-  ]
+  depends_on = [aws_internet_gateway.workspace_igw]
 }
 
 # Route table for public subnets
@@ -217,10 +205,6 @@ resource "aws_eks_node_group" "workspace_nodes" {
 
   tags = {
     Name = "workspace-node-group"
-  }
-
-  lifecycle {
-    ignore_changes = [scaling_config[0].desired_size]
   }
 }
 
@@ -361,6 +345,14 @@ resource "aws_security_group" "efs_sg" {
 #     Name = "workspace-efs-sg"
 #   }
 # }
+
+# EFS Mount Targets
+resource "aws_efs_mount_target" "workspace_efs_mount" {
+  count           = length(var.availability_zones)
+  file_system_id  = aws_efs_file_system.workspace_efs.id
+  subnet_id       = aws_subnet.private[count.index].id
+  security_groups = [aws_security_group.efs_sg.id]
+}
 
 # OIDC Provider for IAM roles for service accounts
 data "tls_certificate" "eks" {
