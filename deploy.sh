@@ -90,6 +90,13 @@ kubectl apply -f kubernetes/config/secrets.yaml
 echo "Step 6: Applying Kubernetes configurations..."
 kubectl apply -f kubernetes/cert-manager/certificates/workspace-cert.yaml
 
+echo "Fetching AWS Hosted Zone ID for domain: $DOMAIN"
+AWS_HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$DOMAIN" --query "HostedZones[0].Id" --output text | sed 's|/hostedzone/||')
+echo "AWS Hosted Zone ID: $AWS_HOSTED_ZONE_ID"
+
+# Export it to be used in envsubst for cluster issuer
+export AWS_HOSTED_ZONE_ID
+
 # Step 6.1: Update cluster issuer with the correct values
 echo "Step 6.1: Updating ClusterIssuer configuration..."
 cat <<EOF > ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml
