@@ -88,7 +88,7 @@ kubectl apply -f kubernetes/config/secrets.yaml
 
 # Step 6: Apply Kubernetes core configs
 echo "Step 6: Applying Kubernetes configurations..."
-kubectl apply -f kubernetes/cert-manager/certificates/workspace-certs.yaml
+kubectl apply -f kubernetes/cert-manager/certificates/workspace-cert.yaml
 
 # Step 6.1: Update cluster issuer with the correct values
 echo "Step 6.1: Updating ClusterIssuer configuration..."
