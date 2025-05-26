@@ -15,84 +15,80 @@ if (Test-Path $envFilePath) {
 
 # === Define template directories ===
 $templateDirs = @(
-    "kubernetes/base/config",
     "kubernetes/base/ingress",
     "kubernetes/base/service-accounts",
-    "kubernetes/cert-manager/certificates",
-    "kubernetes/cert-manager/issuers",
-    "kubernetes/port_detector"
+    "kubernetes/cert-manager"
+    # Add more directories here as needed
 )
 
-# === Function to replace variables in templates ===
-function Replace-VariablesInTemplate {
-    param(
-        [string]$templatePath
+# === File where only SUBDOMAIN_REPLACE_ME should be replaced ===
+$partialEnvTemplate = "kubernetes/port_detector/port-detector-configmap.yaml"
+
+# === Function to replace all environment variables in a file ===
+function Replace-AllEnvVarsInTemplate {
+    param (
+        [string]$filePath
     )
-
-    # Read the template content
-    $content = Get-Content -Path $templatePath -Raw
-
-    # Retrieve all environment variables
+    $content = Get-Content -Path $filePath -Raw
     $envVars = [System.Environment]::GetEnvironmentVariables()
 
-    # Loop through each environment variable and perform the replacement
     foreach ($key in $envVars.Keys) {
-        $pattern = "\$\{$key\}"  # Matches ${VAR}
+        $pattern = "\$\{$key\}"
         $value = $envVars[$key]
-
-        # No need to escape value here (no escaping of periods)
-        # Replace all instances of ${key} with the value
         $content = $content -replace $pattern, $value
     }
 
-    # Write the updated content back to the template file
-    Set-Content -Path $templatePath -Value $content -Encoding UTF8 -Force
+    Set-Content -Path $filePath -Value $content -Encoding UTF8 -Force
 }
 
-# === Process YAML templates in each specified directory ===
+# === Function to replace only SUBDOMAIN_REPLACE_ME in a file ===
+function Replace-SubdomainOnly {
+    param (
+        [string]$filePath
+    )
+    if (-not $env:SUBDOMAIN_REPLACE_ME) {
+        Write-Host "Warning: SUBDOMAIN_REPLACE_ME is not set in the environment."
+        return
+    }
+    $content = Get-Content -Path $filePath -Raw
+    $content = $content -replace '\$\{SUBDOMAIN_REPLACE_ME\}', $env:SUBDOMAIN_REPLACE_ME
+    Set-Content -Path $filePath -Value $content -Encoding UTF8 -Force
+}
+
+# === Step 1: Replace all variables in templates (excluding the partial one) ===
 foreach ($dir in $templateDirs) {
     if (Test-Path $dir) {
-        Write-Host ""
-        Write-Host "Processing templates in $dir..."
+        Write-Host "Processing templates in $dir (all variables)..."
 
-        # Get all *.yaml files in the directory
-        $templates = Get-ChildItem -Path $dir -Filter *.yaml
+        $templates = Get-ChildItem -Path $dir -Filter *.yaml -Recurse
         foreach ($template in $templates) {
-            Write-Host "  Replacing variables in $($template.Name)..."
-            Replace-VariablesInTemplate -templatePath $template.FullName
-            Write-Host "  Processed $($template.Name)"
+            if ($template.FullName -eq (Resolve-Path $partialEnvTemplate)) {
+                Write-Host "  Skipping $($template.FullName) (only SUBDOMAIN_REPLACE_ME will be replaced later)"
+                continue
+            }
+
+            Write-Host "  Processing $($template.FullName) with full environment substitution..."
+            Replace-AllEnvVarsInTemplate -filePath $template.FullName
+            Write-Host "  Processed $($template.FullName)"
         }
     } else {
         Write-Host "Directory not found: $dir"
     }
 }
 
-# === Apply all templates via kubectl ===
-Write-Host ""
-Write-Host "Applying processed Kubernetes YAML files..."
-foreach ($dir in $templateDirs) {
-    if (Test-Path $dir) {
-        kubectl apply -f $dir
-    }
+# === Step 2: Replace only SUBDOMAIN_REPLACE_ME in the specific file ===
+if (Test-Path $partialEnvTemplate) {
+    Write-Host "Processing $partialEnvTemplate (only SUBDOMAIN_REPLACE_ME)..."
+    Replace-SubdomainOnly -filePath $partialEnvTemplate
+    Write-Host "Processed $partialEnvTemplate"
+} else {
+    Write-Host "Warning: File not found - $partialEnvTemplate"
 }
 
-# === Apply specific config and secrets ===
-Write-Host ""
-Write-Host "Creating/Updating ConfigMap and Secrets..."
-kubectl apply -f kubernetes/config/configmap.yaml
-kubectl apply -f kubernetes/config/secrets.yaml
-
-# === Verify deployment status ===
-Write-Host ""
-Write-Host "Verifying deployment status..."
-kubectl get deployments
-kubectl get pods
-
-Write-Host ""
-Write-Host "Deployment complete. Add your test commands below if needed."
-
-# Check if AWS CLI is working now
+# === Optional: Verify AWS CLI access ===
+Write-Host "Checking AWS CLI identity..."
 aws sts get-caller-identity
+
 
 
 # Step 1: Initialize and Apply Terraform
@@ -135,6 +131,12 @@ Write-Host "Step 4: Creating namespaces..."
 Write-Host "Step 5: Installing cert-manager..."
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
 
+# === Step 3: Apply the main configmap and secrets ===
+Write-Host "Creating/Updating ConfigMap..."
+kubectl apply -f "kubernetes/config/configmap.yaml"
+
+Write-Host "Creating/Updating Secrets..."
+kubectl apply -f "kubernetes/config/secrets.yaml"
 
 # Step 6: Apply Kubernetes configurations and deploy components
 Write-Host "Step 6: Applying Kubernetes configurations..."

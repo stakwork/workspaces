@@ -45,13 +45,6 @@ else
   echo "Warning: File not found - $PARTIAL_ENV_TEMPLATE"
 fi
 
-# Step 3: Apply the main configmap
-echo "Creating/Updating ConfigMap..."
-kubectl apply -f kubernetes/config/configmap.yaml
-
-# Create/Update Secrets
-echo "Creating/Updating Secrets..."
-kubectl apply -f kubernetes/config/secrets.yaml
 
 
 # Check AWS CLI
@@ -85,6 +78,13 @@ done
 echo "Step 5: Installing cert-manager..."
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
 
+# Step 3: Apply the main configmap
+echo "Creating/Updating ConfigMap..."
+kubectl apply -f kubernetes/config/configmap.yaml
+
+# Create/Update Secrets
+echo "Creating/Updating Secrets..."
+kubectl apply -f kubernetes/config/secrets.yaml
 
 # Step 6: Apply Kubernetes core configs
 echo "Step 6: Applying Kubernetes configurations..."
