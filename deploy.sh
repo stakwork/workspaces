@@ -36,13 +36,30 @@ kubectl wait --for=condition=Ready nodes --all --timeout=120s
 
 # Step 5: Create namespaces
 echo "Step 5: Creating namespaces..."
-for ns in workspace-system monitoring ingress-nginx; do
+for ns in workspace-system monitoring ingress-nginx external-dns; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
+
+# Step 5b: Install External DNS
+echo "Step 5b: Installing External DNS..."
+envsubst < ./kubernetes/base/apps/external-dns.yaml > ./kubernetes/base/apps/external-dns-generated.yaml
+kubectl apply -f ./kubernetes/base/apps/external-dns-generated.yaml
+echo "⏳ Waiting for External DNS to be ready..."
+kubectl -n external-dns wait --for=condition=available deployment/external-dns --timeout=120s
 
 # Step 6: Install cert-manager
 echo "Step 6: Installing cert-manager..."
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
+
+# Wait for cert-manager to be ready
+echo "⏳ Waiting for cert-manager to be ready..."
+kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=120s
+
+# Step 7: Setup Registry TLS
+echo "Setting up Registry TLS certificates..."
+envsubst < ./kubernetes/base/tls/workspace-registry-tls.yaml | kubectl apply -f -
+echo "⏳ Waiting for certificate generation job to complete..."
+kubectl wait --for=condition=complete job/create-registry-certs -n workspace-system --timeout=60s
 
 envsubst < ./kubernetes/base/config/workspace-domain-settings.yaml > ./kubernetes/base/config/workspace-domain-settings-generated.yaml
 kubectl apply -f ./kubernetes/base/config/workspace-domain-settings-generated.yaml
@@ -145,14 +162,26 @@ cd ../..
 
 # Step 18: Update deployment manifest with latest image
 echo "Step 18: Updating deployment manifest..."
-envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
-if kubectl get deployment workspace-controller -n workspace-system >/dev/null 2>&1; then
-  echo "⚠️ Deployment 'workspace-controller' already exists, updating..."
-else
-  echo "ℹ️ Creating Deployment 'workspace-controller'..."
+# Ensure AWS_ACCOUNT_ID and AWS_REGION are set
+if [[ -z "${AWS_ACCOUNT_ID}" ]] || [[ -z "${AWS_REGION}" ]]; then
+  echo "❌ AWS_ACCOUNT_ID or AWS_REGION not set"
+  exit 1
 fi
+
+# Generate deployment manifest with proper image name
+echo "Generating deployment manifest with image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
+envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
+
+# Apply the deployment
+if kubectl get deployment workspace-controller -n workspace-system >/dev/null 2>&1; then
+  echo "⚠️ Deployment 'workspace-controller' exists, updating..."
+  kubectl delete deployment workspace-controller -n workspace-system
+fi
+
+echo "🚀 Deploying workspace controller..."
 kubectl apply -f ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
-echo "✅ Deployment 'workspace-controller' applied."
+echo "✅ Deployment applied, waiting for rollout..."
+kubectl rollout status deployment/workspace-controller -n workspace-system --timeout=120s
 
 # Step 18: Set service account for EFS CSI Controller
 echo "Step 18: Setting service account for EFS CSI Controller..."
@@ -162,8 +191,11 @@ kubectl set serviceaccount deployment/efs-csi-controller -n kube-system efs-csi-
 
 # Step 19: Deploy Controller components
 echo "Step 19: Deploying Controller components..."
-kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
 kubectl apply -f kubernetes/workspace_controller/k8s/service.yaml
+
+# Verify controller is running
+echo "⏳ Waiting for workspace controller to be ready..."
+kubectl rollout status deployment/workspace-controller -n workspace-system --timeout=120s
 
 # Step 20: Verify deployment status
 echo "Step 20: Verifying deployment..."

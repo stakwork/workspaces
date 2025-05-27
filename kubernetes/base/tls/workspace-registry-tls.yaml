@@ -10,7 +10,7 @@ spec:
     spec:
       containers:
       - name: cert-generator
-        image: alpine/openssl
+        image: bitnami/kubectl:latest
         command:
         - /bin/sh
         - -c

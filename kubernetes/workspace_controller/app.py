@@ -13,6 +13,12 @@ from flask_cors import CORS
 from kubernetes import client, config
 from datetime import datetime
 
+# Get AWS account ID from environment variable
+AWS_ACCOUNT_ID = os.getenv('AWS_ACCOUNT_ID')
+if not AWS_ACCOUNT_ID:
+    logger.error("AWS_ACCOUNT_ID environment variable is not set")
+    raise ValueError("AWS_ACCOUNT_ID environment variable must be set")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -598,7 +604,7 @@ EOL
     # Create a wrapper Dockerfile that uses the user's image as a base
     cat > Dockerfile << 'EOF'
 # This will be replaced with the tag for the user's custom image
-FROM xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}
+FROM {AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}
 
 # Install code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh
@@ -1083,7 +1089,7 @@ def _create_base_image_kaniko_container(workspace_ids):
         args=[
             "--dockerfile=/workspace/Dockerfile",
             "--context=/workspace",
-            f"--destination=xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}",
+            f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}",
             "--insecure",
             "--skip-tls-verify"
         ],
@@ -1108,7 +1114,7 @@ def _create_wrapper_kaniko_container(workspace_ids):
         args=[
             "--dockerfile=/workspace/Dockerfile",
             "--context=/workspace",
-            f"--destination=xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}",
+            f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}",
             "--insecure",
             "--skip-tls-verify"
         ],
@@ -1179,7 +1185,7 @@ def create_service_workspace_account(workspace_namespace):
             name="workspace-controller",
             namespace=workspace_namespace,
             annotations={
-                "eks.amazonaws.com/role-arn": "arn:aws:iam::xxxyyyzzz:role/workspace-controller-role"
+                "eks.amazonaws.com/role-arn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/workspace-controller-role"
             }
         )
     )
@@ -1202,7 +1208,7 @@ def _create_code_server_container(workspace_ids, workspace_config):
 
     return client.V1Container(
         name="code-server",
-        image=f"xxxyyyzzz.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}",
+        image=f"{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}",
         image_pull_policy=image_pull_policy,
         args=[
             "--user-data-dir", "/config/data",
