@@ -1,54 +1,15 @@
 #!/bin/bash
+set -euo pipefail
 
-# Load environment variables from .env file
-set -a
-source .env
-set +a
-
-# Directories where all environment variables should be replaced
-TEMPLATE_DIRS=(
-  "kubernetes/base/ingress"
-  "kubernetes/base/service-accounts"
-  "kubernetes/cert-manager"
-  # Add more directories here as needed
-)
-
-# Path to the file where only SUBDOMAIN_REPLACE_ME should be replaced
-PARTIAL_ENV_TEMPLATE="kubernetes/port_detector/port-detector-configmap.yaml"
-
-# Step 1: Replace all variables in templates (excluding the partial one)
-for TEMPLATES_DIR in "${TEMPLATE_DIRS[@]}"; do
-  echo "Processing templates in $TEMPLATES_DIR (all variables)..."
-
-  TEMPLATES=$(find "$TEMPLATES_DIR" -type f -name "*.yaml")
-
-  for TEMPLATE in $TEMPLATES; do
-    if [[ "$TEMPLATE" == "$PARTIAL_ENV_TEMPLATE" ]]; then
-      echo "  Skipping $TEMPLATE (only SUBDOMAIN_REPLACE_ME will be replaced later)"
-      continue
-    fi
-
-    echo "  Processing $TEMPLATE with full envsubst..."
-    envsubst < "$TEMPLATE" > "$TEMPLATE.tmp"
-    mv "$TEMPLATE.tmp" "$TEMPLATE"
-    echo "  Processed $TEMPLATE"
-  done
-done
-
-# Step 2: Replace only SUBDOMAIN_REPLACE_ME in the specific file
-if [ -f "$PARTIAL_ENV_TEMPLATE" ]; then
-  echo "Processing $PARTIAL_ENV_TEMPLATE (only SUBDOMAIN_REPLACE_ME)..."
-  envsubst '${SUBDOMAIN_REPLACE_ME}' < "$PARTIAL_ENV_TEMPLATE" > "$PARTIAL_ENV_TEMPLATE.tmp"
-  mv "$PARTIAL_ENV_TEMPLATE.tmp" "$PARTIAL_ENV_TEMPLATE"
-  echo "Processed $PARTIAL_ENV_TEMPLATE"
+# Load environment variables
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
 else
-  echo "Warning: File not found - $PARTIAL_ENV_TEMPLATE"
+  echo "❌ .env file not found!"
+  exit 1
 fi
-
-
-
-# Check AWS CLI
-aws sts get-caller-identity
 
 # Step 1: Initialize and apply Terraform
 echo "Step 1: Initializing and applying Terraform..."
@@ -62,144 +23,119 @@ cd ..
 echo "Step 2: Getting Terraform outputs..."
 EFS_ID=$(terraform -chdir=terraform output -raw efs_id)
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
-REGION=${envVars["REGION"]:-us-east-1}
+AWS_REGION=${AWS_REGION:-us-east-1}
+export AWS_ACCOUNT_ID AWS_REGION
 
-# Step 3: Configure kubectl
+# Step 3: Configure kubectl for EKS
 echo "Step 3: Configuring kubectl..."
-aws eks update-kubeconfig --region "$REGION" --name workspace-cluster
+aws eks update-kubeconfig --region "$AWS_REGION" --name workspace-cluster
 
-# Step 4: Create namespaces
-echo "Step 4: Creating namespaces..."
-for ns in ingress-nginx cert-manager workspace-system monitoring; do
-    kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+# Step 4: Wait for nodes to be ready
+echo "⏳ Waiting for all nodes to be ready..."
+kubectl wait --for=condition=Ready nodes --all --timeout=120s
+
+# Step 5: Create namespaces
+echo "Step 5: Creating namespaces..."
+for ns in workspace-system monitoring ingress-nginx; do
+  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-# Step 5: Install cert-manager
-echo "Step 5: Installing cert-manager..."
+# Step 6: Install cert-manager
+echo "Step 6: Installing cert-manager..."
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
 
-# Step 3: Apply the main configmap
-echo "Creating/Updating ConfigMap..."
-kubectl apply -f kubernetes/config/configmap.yaml
+envsubst < ./kubernetes/base/config/workspace-domain-settings.yaml > ./kubernetes/base/config/workspace-domain-settings-generated.yaml
+kubectl apply -f ./kubernetes/base/config/workspace-domain-settings-generated.yaml
+envsubst < ./kubernetes/base/ingress/workspace-ingress-admin.yaml > ./kubernetes/base/ingress/workspace-ingress-admin-generated.yaml
+kubectl apply -f ./kubernetes/base/ingress/workspace-ingress-admin-generated.yaml
+envsubst < ./kubernetes/cert-manager/certificates/workspace-cert.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
+kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
+envsubst < ./kubernetes/port_detector/port-detector-configmap.yaml > ./kubernetes/port_detector/port-detector-configmap-generated.yaml
+kubectl apply -f ./kubernetes/port_detector/port-detector-configmap-generated.yaml
+envsubst < ./kubernetes/base/service-accounts/workspace-service-account.yaml > ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml
+kubectl apply -f ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml
 
-# Create/Update Secrets
-echo "Creating/Updating Secrets..."
-kubectl apply -f kubernetes/config/secrets.yaml
-
-# Step 6: Apply Kubernetes core configs
-echo "Step 6: Applying Kubernetes configurations..."
-kubectl apply -f kubernetes/cert-manager/certificates/workspace-cert.yaml
-
-echo "Fetching AWS Hosted Zone ID for domain: $DOMAIN"
+echo "Creating ClusterIssuer for cert-manager..."
 AWS_HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$DOMAIN" --query "HostedZones[0].Id" --output text | sed 's|/hostedzone/||')
-echo "AWS Hosted Zone ID: $AWS_HOSTED_ZONE_ID"
+echo "Hosted Zone ID for $DOMAIN is: $AWS_HOSTED_ZONE_ID"
+export AWS_HOSTED_ZONE_ID AWS_REGION EFS_ID
+envsubst < ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml > ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
+kubectl apply -f ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
 
-# Export it to be used in envsubst for cluster issuer
-export AWS_HOSTED_ZONE_ID
 
-# Step 6.1: Update cluster issuer with the correct values
-echo "Step 6.1: Updating ClusterIssuer configuration..."
-cat <<EOF > ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-dns01
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: gonzaloaune@stakwork.com
-    privateKeySecretRef:
-      name: letsencrypt-dns01-account-key
-    solvers:
-    - dns01:
-        route53:
-          region: ${AWS_REGION}
-          hostedZoneID: ${AWS_HOSTED_ZONE_ID}
-EOF
+# Verify AWS CLI identity
+echo "🌐 Verifying AWS identity..."
+if aws sts get-caller-identity > /dev/null 2>&1; then
+  aws sts get-caller-identity
+else
+  echo "❌ AWS CLI not configured correctly."
+  exit 1
+fi
 
-# Apply cert-manager resources
-echo "Step 6.1: Applying cert-manager resources..."
-kubectl apply -f ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml
-kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert.yaml
-
-# Apply base components
-echo "Step 6.2: Applying base components..."
+# Step 9: Apply additional base components
+echo "Step 9: Applying additional base components..."
 kubectl apply -f ./kubernetes/base/cluster-roles/workspace-cluster-role-binding.yaml
-kubectl apply -f ./kubernetes/base/config/workspace-domain-settings.yaml
-kubectl apply -f ./kubernetes/base/ingress/workspace-ingress-admin.yaml
+kubectl apply -f ./kubernetes/base/cluster-roles/namespace-creator-role-binding.yaml
 kubectl apply -f ./kubernetes/base/rbac/workspace-rbac-permissions.yaml
 kubectl apply -f ./kubernetes/base/rbac/workspace-read-node.yaml
 kubectl apply -f ./kubernetes/base/rbac/workspace-registry-admin.yaml
 kubectl apply -f ./kubernetes/base/service-accounts/workspace-registry-service-account.yaml
 kubectl apply -f ./kubernetes/base/tls/workspace-registry-tls.yaml
 kubectl apply -f ./kubernetes/base/apps/workspace-registry.yaml
-kubectl apply -f ./kubernetes/base/service-accounts/workspace-service-account.yaml
 kubectl apply -f ./kubernetes/base/apps/workspace-ui.yaml
 
-# Step 7: Port detector
-echo "Step 7: Applying port detector configurations..."
-kubectl apply -f ./kubernetes/port_detector/port-detector-configmap.yaml
+# Step 10: Apply Port Detector RBAC
+echo "Step 10: Applying port detector RBAC..."
 kubectl apply -f ./kubernetes/port_detector/port-detector-rbac.yaml
 
-# Step 8: Install NGINX Ingress
-echo "Step 8: Installing Nginx Ingress Controller..."
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+
+# Step 12: Install NGINX Ingress Controller with Helm
+echo "Step 12: Installing NGINX Ingress Controller..."
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx || true
 helm repo update
-helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
+if ! helm status nginx-ingress -n ingress-nginx >/dev/null 2>&1; then
+  helm install nginx-ingress ingress-nginx/ingress-nginx \
     --namespace ingress-nginx \
     --set controller.service.type=LoadBalancer
+else
+  echo "✅ NGINX Ingress Controller already installed"
+fi
 
-# Step 8: Install EFS CSI Driver
+# Step 13: Install AWS EFS CSI Driver
+echo "Step 13: Installing AWS EFS CSI Driver..."
 kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"
+envsubst < ./kubernetes/storage/efs-csi-controller-sa.yaml > ./kubernetes/storage/efs-csi-controller-sa-generated.yaml
+kubectl apply -f ./kubernetes/storage/efs-csi-controller-sa-generated.yaml
 
-# Step 9: Create EFS StorageClass
-echo "Step 9: Creating EFS StorageClass..."
-cat <<EOF > ./kubernetes/storage/storage-class.yaml
-kind: StorageClass
-apiVersion: storage.k8s.io/v1
-metadata:
-  name: efs-sc
-provisioner: efs.csi.aws.com
-parameters:
-  provisioningMode: efs-ap
-  fileSystemId: ${EFS_ID}
-  directoryPerms: "700"
-EOF
+echo "⏳ Waiting for EFS CSI Driver to be ready..."
+kubectl rollout status daemonset/efs-csi-node -n kube-system --timeout=120s || true
 
-kubectl apply -f ./kubernetes/storage/storage-class.yaml
+# Step 14: Create EFS StorageClass
+echo "Step 14: Creating EFS StorageClass..."
+envsubst < ./kubernetes/storage/storage-class.yaml > ./kubernetes/storage/storage-class-generated.yaml
+if kubectl get storageclass efs-sc >/dev/null 2>&1; then
+  echo "⚠️ StorageClass 'efs-sc' already exists, skipping."
+else
+  kubectl apply -f ./kubernetes/storage/storage-class-generated.yaml
+  echo "✅ StorageClass 'efs-sc' created."
+fi
 
-# Step 10: Update deployment image
-echo "Step 10: Updating deployment configuration..."
-cat <<EOF > ./kubernetes/workspace_controller/k8s/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: workspace-controller
-  namespace: workspace-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: workspace-controller
-  template:
-    metadata:
-      labels:
-        app: workspace-controller
-    spec:
-      containers:
-      - name: workspace-controller
-        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 3000
-EOF
+# Step 15: Create PersistentVolume
+echo "Step 15: Creating PersistentVolume..."
+envsubst < ./kubernetes/storage/persistent-volume.yaml > ./kubernetes/storage/persistent-volume-generated.yaml
+if kubectl get pv registry-pv >/dev/null 2>&1; then
+  echo "⚠️ PersistentVolume 'registry-pv' exists. Updating..."
+else
+  echo "ℹ️ Creating PersistentVolume 'registry-pv'..."
+fi
+kubectl apply -f ./kubernetes/storage/persistent-volume-generated.yaml
+echo "✅ PersistentVolume 'registry-pv' applied."
+# Step 16: Create PersistentVolumeClaim
+echo "Step 16: Creating PersistentVolumeClaim..."
+kubectl apply -f ./kubernetes/storage/persistent-volume-claim.yaml
 
-# Step 11: Deploy Controller
-echo "Step 11: Deploying Controller components..."
-kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
-
-# Step 12: Build and push Docker image
-echo "Step 12: Building and pushing Docker image..." 
+# Step 17: Build and push Docker image BEFORE deploying
+echo "Step 17: Building and pushing Docker image..."
 cd kubernetes/workspace_controller
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 docker build -t workspace-controller .
@@ -207,17 +143,30 @@ docker tag workspace-controller:latest "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.
 docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
 cd ../..
 
-# Step 13: Verify Deployment
-echo "Step 13: Verifying deployment..."
+# Step 18: Update deployment manifest with latest image
+echo "Step 18: Updating deployment manifest..."
+envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
+if kubectl get deployment workspace-controller -n workspace-system >/dev/null 2>&1; then
+  echo "⚠️ Deployment 'workspace-controller' already exists, updating..."
+else
+  echo "ℹ️ Creating Deployment 'workspace-controller'..."
+fi
+kubectl apply -f ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
+echo "✅ Deployment 'workspace-controller' applied."
+
+# Step 18: Set service account for EFS CSI Controller
+echo "Step 18: Setting service account for EFS CSI Controller..."
+kubectl set serviceaccount deployment/efs-csi-controller -n kube-system efs-csi-controller-sa
+
+
+
+# Step 19: Deploy Controller components
+echo "Step 19: Deploying Controller components..."
+kubectl apply -f kubernetes/workspace_controller/k8s/deployment.yaml
+kubectl apply -f kubernetes/workspace_controller/k8s/service.yaml
+
+# Step 20: Verify deployment status
+echo "Step 20: Verifying deployment..."
 kubectl get pods,svc,ingress -n workspace-system
 
-# Final Step: Port Forwarding
-echo "Deployment completed!"
-echo "Starting port-forwarding..."
-
-kubectl port-forward -n workspace-system svc/workspace-ui 8080:80 &
-kubectl port-forward -n workspace-system svc/workspace-controller 3000:3000 &
-
-echo "Access your application at:"
-echo "API: http://localhost:3000"
-echo "UI:  http://localhost:8080"
+echo "🎉 Deployment completed successfully!"
