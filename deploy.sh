@@ -55,11 +55,6 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/
 echo "⏳ Waiting for cert-manager to be ready..."
 kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=120s
 
-# Step 7: Setup Registry TLS
-echo "Setting up Registry TLS certificates..."
-envsubst < ./kubernetes/base/tls/workspace-registry-tls.yaml | kubectl apply -f -
-echo "⏳ Waiting for certificate generation job to complete..."
-kubectl wait --for=condition=complete job/create-registry-certs -n workspace-system --timeout=60s
 
 envsubst < ./kubernetes/base/config/workspace-domain-settings.yaml > ./kubernetes/base/config/workspace-domain-settings-generated.yaml
 kubectl apply -f ./kubernetes/base/config/workspace-domain-settings-generated.yaml
@@ -97,7 +92,14 @@ kubectl apply -f ./kubernetes/base/rbac/workspace-rbac-permissions.yaml
 kubectl apply -f ./kubernetes/base/rbac/workspace-read-node.yaml
 kubectl apply -f ./kubernetes/base/rbac/workspace-registry-admin.yaml
 kubectl apply -f ./kubernetes/base/service-accounts/workspace-registry-service-account.yaml
-kubectl apply -f ./kubernetes/base/tls/workspace-registry-tls.yaml
+
+# Step 9.1: Setup Registry TLS
+echo "Setting up Registry TLS certificates..."
+envsubst < ./kubernetes/base/tls/workspace-registry-tls.yaml | kubectl apply -f -
+echo "⏳ Waiting for certificate generation job to complete..."
+kubectl wait --for=condition=complete job/create-registry-certs -n workspace-system --timeout=60s
+
+
 kubectl apply -f ./kubernetes/base/apps/workspace-registry.yaml
 kubectl apply -f ./kubernetes/base/apps/workspace-ui.yaml
 

@@ -5,11 +5,13 @@ metadata:
   namespace: workspace-system
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    external-dns.alpha.kubernetes.io/hostname: "${SUBDOMAIN_REPLACE_ME},*.${SUBDOMAIN_REPLACE_ME}"
 spec:
-  ingressClassName: nginx                   
+  ingressClassName: nginx
   tls:
   - hosts:
-    - ${SUBDOMAIN_REPLACE_ME}
+    - ${SUBDOMAIN_REPLACE_ME}         # e.g. workspaces.turiz.space
+    - "*.${SUBDOMAIN_REPLACE_ME}"     # wildcard for all subdomains
     secretName: workspace-admin-tls
   rules:
   - host: ${SUBDOMAIN_REPLACE_ME}
@@ -22,6 +24,16 @@ spec:
             name: workspace-controller
             port:
               number: 3000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: workspace-ui
+            port:
+              number: 80
+  - host: "*.${SUBDOMAIN_REPLACE_ME}"   # wildcard rule
+    http:
+      paths:
       - path: /
         pathType: Prefix
         backend:
