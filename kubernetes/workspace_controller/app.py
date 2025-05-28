@@ -14,7 +14,7 @@ from kubernetes import client, config
 from datetime import datetime
 
 # Get AWS account ID from environment variable
-AWS_ACCOUNT_ID = os.getenv('AWS_ACCOUNT_ID')
+AWS_ACCOUNT_ID = os.environ('AWS_ACCOUNT_ID')
 if not AWS_ACCOUNT_ID:
     logger.error("AWS_ACCOUNT_ID environment variable is not set")
     raise ValueError("AWS_ACCOUNT_ID environment variable must be set")

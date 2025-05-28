@@ -142,16 +142,28 @@ fi
 # Step 15: Create PersistentVolume
 echo "Step 15: Creating PersistentVolume..."
 envsubst < ./kubernetes/storage/persistent-volume.yaml > ./kubernetes/storage/persistent-volume-generated.yaml
-if kubectl get pv registry-pv >/dev/null 2>&1; then
-  echo "⚠️ PersistentVolume 'registry-pv' exists. Updating..."
+if kubectl get pv registry-storage >/dev/null 2>&1; then
+  echo "⚠️ PersistentVolume 'registry-storage' exists. Updating..."
 else
-  echo "ℹ️ Creating PersistentVolume 'registry-pv'..."
+  echo "ℹ️ Creating PersistentVolume 'registry-storage'..."
 fi
 kubectl apply -f ./kubernetes/storage/persistent-volume-generated.yaml
-echo "✅ PersistentVolume 'registry-pv' applied."
+echo "✅ PersistentVolume 'registry-storage' applied."
 # Step 16: Create PersistentVolumeClaim
 echo "Step 16: Creating PersistentVolumeClaim..."
 kubectl apply -f ./kubernetes/storage/persistent-volume-claim.yaml
+
+# Generate deployment manifest with proper image name
+echo "Generating deployment manifest with image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
+envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
+echo "🚀 Deploying workspace controller..."
+kubectl apply -f ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
+echo "✅ Deployment applied, waiting for rollout..."
+kubectl rollout status deployment/workspace-controller -n workspace-system --timeout=120s
+
+# Step 19: Deploy Controller components
+echo "Step 19: Deploying Controller components..."
+kubectl apply -f kubernetes/workspace_controller/k8s/service.yaml
 
 # Step 17: Build and push Docker image BEFORE deploying
 echo "Step 17: Building and pushing Docker image..."
@@ -170,30 +182,9 @@ if [[ -z "${AWS_ACCOUNT_ID}" ]] || [[ -z "${AWS_REGION}" ]]; then
   exit 1
 fi
 
-# Generate deployment manifest with proper image name
-echo "Generating deployment manifest with image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
-envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
-
-# Apply the deployment
-if kubectl get deployment workspace-controller -n workspace-system >/dev/null 2>&1; then
-  echo "⚠️ Deployment 'workspace-controller' exists, updating..."
-  kubectl delete deployment workspace-controller -n workspace-system
-fi
-
-echo "🚀 Deploying workspace controller..."
-kubectl apply -f ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
-echo "✅ Deployment applied, waiting for rollout..."
-kubectl rollout status deployment/workspace-controller -n workspace-system --timeout=120s
-
 # Step 18: Set service account for EFS CSI Controller
 echo "Step 18: Setting service account for EFS CSI Controller..."
 kubectl set serviceaccount deployment/efs-csi-controller -n kube-system efs-csi-controller-sa
-
-
-
-# Step 19: Deploy Controller components
-echo "Step 19: Deploying Controller components..."
-kubectl apply -f kubernetes/workspace_controller/k8s/service.yaml
 
 # Verify controller is running
 echo "⏳ Waiting for workspace controller to be ready..."
@@ -202,5 +193,4 @@ kubectl rollout status deployment/workspace-controller -n workspace-system --tim
 # Step 20: Verify deployment status
 echo "Step 20: Verifying deployment..."
 kubectl get pods,svc,ingress -n workspace-system
-
 echo "🎉 Deployment completed successfully!"
