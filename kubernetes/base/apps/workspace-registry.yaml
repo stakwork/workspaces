@@ -33,7 +33,7 @@ spec:
     spec:
       initContainers:
       - name: cert-generator
-        image: alpine:latest
+        image: bitnami/kubectl:latest
         command:
         - /bin/sh
         - -c

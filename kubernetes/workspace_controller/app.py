@@ -1180,7 +1180,7 @@ def create_service_workspace_account(workspace_namespace):
             name="workspace-controller",
             namespace=workspace_namespace,
             annotations={
-                "eks.amazonaws.com/role-arn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/workspace-controller-role"
+                "eks.amazonaws.com/role-arn": f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/workspace-controller-role"
             }
         )
     )
