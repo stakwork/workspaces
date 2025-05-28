@@ -141,12 +141,21 @@ fi
 
 # Step 15: Create PersistentVolume
 echo "Step 15: Creating PersistentVolume..."
+
+# Render the YAML file
 envsubst < ./kubernetes/storage/persistent-volume.yaml > ./kubernetes/storage/persistent-volume-generated.yaml
+# Delete existing PV if it exists
 if kubectl get pv registry-storage >/dev/null 2>&1; then
-  echo "⚠️ PersistentVolume 'registry-storage' exists. Updating..."
-else
-  echo "ℹ️ Creating PersistentVolume 'registry-storage'..."
+  echo "⚠️ PersistentVolume 'registry-storage' exists. Deleting..."
+  kubectl delete pv registry-storage
+  echo "⏳ Waiting for PV to be deleted..."
+  # Wait until it's fully removed
+  while kubectl get pv registry-storage >/dev/null 2>&1; do
+    sleep 1
+  done
 fi
+# Create the new PV
+echo "ℹ️ Creating PersistentVolume 'registry-storage'..."
 kubectl apply -f ./kubernetes/storage/persistent-volume-generated.yaml
 echo "✅ PersistentVolume 'registry-storage' applied."
 # Step 16: Create PersistentVolumeClaim
