@@ -13,12 +13,6 @@ from flask_cors import CORS
 from kubernetes import client, config
 from datetime import datetime
 
-# Get AWS account ID from environment variable
-AWS_ACCOUNT_ID = os.environ('AWS_ACCOUNT_ID')
-if not AWS_ACCOUNT_ID:
-    logger.error("AWS_ACCOUNT_ID environment variable is not set")
-    raise ValueError("AWS_ACCOUNT_ID environment variable must be set")
-
 app = Flask(__name__)
 CORS(app)
 
@@ -46,7 +40,8 @@ try:
     DOMAIN = config_map.data.get("domain", "SUBDOMAIN_REPLACE_ME")
     PARENT_DOMAIN = config_map.data.get("parent-domain", "REPLACE_ME")
     WORKSPACE_DOMAIN = config_map.data.get("workspace-domain", "SUBDOMAIN_REPLACE_ME")
-    logger.info(f"Using domain: {DOMAIN}, parent domain: {PARENT_DOMAIN}, workspace domain: {WORKSPACE_DOMAIN}")
+    AWS_ACCOUNT_ID = config_map.data.get("aws-account-id", "AWS_ACCOUNT_ID")
+    logger.info(f"Using domain: {DOMAIN}, parent domain: {PARENT_DOMAIN}, workspace domain: {WORKSPACE_DOMAIN}, AWS account ID: {AWS_ACCOUNT_ID}")
 except Exception as e:
     logger.error(f"Error reading config map: {e}")
     DOMAIN = "SUBDOMAIN_REPLACE_ME"
