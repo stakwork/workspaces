@@ -40,18 +40,18 @@ for ns in workspace-system monitoring ingress-nginx external-dns; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-# Step 5b: Install External DNS
-echo "Step 5b: Installing External DNS..."
+# Step 6: Install External DNS
+echo "Step 6: Installing External DNS..."
 envsubst < ./kubernetes/base/apps/external-dns.yaml > ./kubernetes/base/apps/external-dns-generated.yaml
 kubectl apply -f ./kubernetes/base/apps/external-dns-generated.yaml
 echo "⏳ Waiting for External DNS to be ready..."
 kubectl -n external-dns wait --for=condition=available deployment/external-dns --timeout=120s
 
-# Step 6: Install cert-manager
-echo "Step 6: Installing cert-manager..."
+# Step 6b: Install cert-manager
+echo "Step 6b: Installing cert-manager..."
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
 
-# Wait for cert-manager to be ready
+# Step 7: Wait for cert-manager to be ready
 echo "⏳ Waiting for cert-manager to be ready..."
 kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=120s
 
@@ -75,7 +75,7 @@ envsubst < ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml > ./k
 kubectl apply -f ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
 
 
-# Verify AWS CLI identity
+# Step 8: Verify AWS CLI identity
 echo "🌐 Verifying AWS identity..."
 if aws sts get-caller-identity > /dev/null 2>&1; then
   aws sts get-caller-identity
@@ -108,8 +108,8 @@ echo "Step 10: Applying port detector RBAC..."
 kubectl apply -f ./kubernetes/port_detector/port-detector-rbac.yaml
 
 
-# Step 12: Install NGINX Ingress Controller with Helm
-echo "Step 12: Installing NGINX Ingress Controller..."
+# Step 11: Install NGINX Ingress Controller with Helm
+echo "Step 11: Installing NGINX Ingress Controller..."
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx || true
 helm repo update
 if ! helm status nginx-ingress -n ingress-nginx >/dev/null 2>&1; then
@@ -120,14 +120,21 @@ else
   echo "✅ NGINX Ingress Controller already installed"
 fi
 
-# Step 13: Install AWS EFS CSI Driver
-echo "Step 13: Installing AWS EFS CSI Driver..."
+# Step 12: Install AWS EFS CSI Driver
+echo "Step 12: Installing AWS EFS CSI Driver..."
 kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"
 envsubst < ./kubernetes/storage/efs-csi-controller-sa.yaml > ./kubernetes/storage/efs-csi-controller-sa-generated.yaml
 kubectl apply -f ./kubernetes/storage/efs-csi-controller-sa-generated.yaml
 
 echo "⏳ Waiting for EFS CSI Driver to be ready..."
 kubectl rollout status daemonset/efs-csi-node -n kube-system --timeout=120s || true
+
+# Step 13: Set service account for EFS CSI Controller
+echo "Step 13: Setting service account for EFS CSI Controller..."
+kubectl set serviceaccount deployment/efs-csi-controller -n kube-system efs-csi-controller-sa
+# Restart EFS CSI Controller deployment
+echo "Restarting EFS CSI Controller deployment..."
+kubectl -n kube-system rollout restart deployment efs-csi-controller
 
 # Step 14: Create EFS StorageClass
 echo "Step 14: Creating EFS StorageClass..."
@@ -140,7 +147,6 @@ else
 fi
 
 echo "Step 15: Creating PersistentVolume..."
-
 # Render the YAML file
 envsubst < ./kubernetes/storage/persistent-volume.yaml > ./kubernetes/storage/persistent-volume-generated.yaml
 # Check if PV exists
@@ -152,17 +158,13 @@ else
   echo "✅ PersistentVolume 'registry-storage' applied."
 fi
 
-# Step 16: Create PersistentVolumeClaim
-echo "Step 16: Creating PersistentVolumeClaim..."
-kubectl apply -f ./kubernetes/storage/persistent-volume-claim.yaml
-
 # Generate deployment manifest with proper image name
 echo "Generating deployment manifest with image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
 envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
 echo "🚀 Deploying workspace controller..."
 kubectl apply -f ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
-# Step 19: Deploy Controller components
-echo "Step 19: Deploying Controller components..."
+# Step 16: Deploy Controller components
+echo "Step 16: Deploying Controller components..."
 kubectl apply -f kubernetes/workspace_controller/k8s/service.yaml
 
 # Step 17: Build and push Docker image BEFORE deploying
@@ -184,12 +186,8 @@ if [[ -z "${AWS_ACCOUNT_ID}" ]] || [[ -z "${AWS_REGION}" ]]; then
   exit 1
 fi
 
-# Step 18: Set service account for EFS CSI Controller
-echo "Step 18: Setting service account for EFS CSI Controller..."
-kubectl set serviceaccount deployment/efs-csi-controller -n kube-system efs-csi-controller-sa
-
-# Verify controller is running
-echo "⏳ Waiting for workspace controller to be ready..."
+# Step 19: Verify controller is running
+echo "⏳ Step 19: Waiting for workspace controller to be ready..."
 kubectl rollout status deployment/workspace-controller -n workspace-system --timeout=120s
 
 # Step 20: Verify deployment status
