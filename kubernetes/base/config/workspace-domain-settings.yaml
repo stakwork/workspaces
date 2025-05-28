@@ -7,3 +7,4 @@ data:
   domain: "${REPLACE_ME}"
   parent-domain: "${REPLACE_ME}"
   workspace-domain: "${SUBDOMAIN_REPLACE_ME}"
+  aws-account-id: "${AWS_ACCOUNT_ID}"
