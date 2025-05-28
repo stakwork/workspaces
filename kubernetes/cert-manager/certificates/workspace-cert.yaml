@@ -6,7 +6,7 @@ metadata:
 spec:
   secretName: workspace-domain-tls
   issuerRef:
-    name: letsencrypt-dns01  # Must be a DNS-01 issuer
+    name: letsencrypt-prod  # Must be a DNS-01 issuer
     kind: ClusterIssuer
   dnsNames:
   - "*.${REPLACE_ME}"

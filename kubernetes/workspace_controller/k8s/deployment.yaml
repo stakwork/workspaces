@@ -19,6 +19,10 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
-        env:
-        - name: AWS_ACCOUNT_ID
-          value: "${AWS_ACCOUNT_ID}"  # Replace with your actual AWS account ID
+        volumeMounts:
+        - name: registry-storage
+          mountPath: /var/lib/registry
+      volumes:
+      - name: registry-storage
+        persistentVolumeClaim:
+          claimName: registry-storage
