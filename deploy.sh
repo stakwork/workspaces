@@ -166,10 +166,12 @@ kubectl apply -f kubernetes/workspace_controller/k8s/service.yaml
 echo "Step 17: Building and pushing Docker image..."
 cd kubernetes/workspace_controller
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-docker build -t workspace-controller .
+docker buildx build --platform linux/amd64 -t workspace-controller .
 docker tag workspace-controller:latest "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
+aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 docker push "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
 cd ../..
+
 
 # Step 18: Update deployment manifest with latest image
 echo "Step 18: Updating deployment manifest..."
