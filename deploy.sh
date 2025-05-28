@@ -158,9 +158,6 @@ echo "Generating deployment manifest with image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS
 envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
 echo "🚀 Deploying workspace controller..."
 kubectl apply -f ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
-echo "✅ Deployment applied, waiting for rollout..."
-kubectl rollout status deployment/workspace-controller -n workspace-system --timeout=120s
-
 # Step 19: Deploy Controller components
 echo "Step 19: Deploying Controller components..."
 kubectl apply -f kubernetes/workspace_controller/k8s/service.yaml
