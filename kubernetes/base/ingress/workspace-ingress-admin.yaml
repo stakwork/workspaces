@@ -13,7 +13,7 @@ spec:
   - hosts:
     - ${SUBDOMAIN_REPLACE_ME}         # e.g. workspaces.turiz.space
     - "*.${SUBDOMAIN_REPLACE_ME}"     # wildcard for all subdomains
-    secretName: workspace-domain-tls
+    secretName: workspace-domain-wildcard-tls
   rules:
   - host: ${SUBDOMAIN_REPLACE_ME}
     http:
