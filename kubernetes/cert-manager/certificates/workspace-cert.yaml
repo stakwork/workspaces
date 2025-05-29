@@ -11,5 +11,4 @@ spec:
   dnsNames:
   - "*.${REPLACE_ME}"
   - "${REPLACE_ME}"
-  secretName: workspace-domain-wildcard-tls
   

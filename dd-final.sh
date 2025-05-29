@@ -104,6 +104,8 @@ envsubst < ./kubernetes/base/service-accounts/workspace-service-account.yaml > .
 kubectl apply -f ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml
 envsubst < ./kubernetes/cert-manager/certificates/workspace-cert.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
 kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
+envsubst < ./kubernetes/cert-manager/certificates/workspace-cert-role.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-role-generated.yaml
+kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-role-generated.yaml
 # Apply domain settings
 envsubst < ./kubernetes/base/config/workspace-domain-settings.yaml > ./kubernetes/base/config/workspace-domain-settings-generated.yaml
 kubectl apply -f ./kubernetes/base/config/workspace-domain-settings-generated.yaml
