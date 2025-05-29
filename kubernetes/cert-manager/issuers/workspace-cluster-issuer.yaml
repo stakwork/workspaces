@@ -16,10 +16,3 @@ spec:
         route53:
           region: ${AWS_REGION}
           hostedZoneID: ${AWS_HOSTED_ZONE_ID}
-          secretAccessKeySecretRef:
-            name: route53-credentials
-            key: secret-access-key
-          accessKeyIDSecretRef:
-            name: route53-credentials
-            key: access-key-id
-          
