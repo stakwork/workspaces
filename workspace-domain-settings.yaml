@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: workspace-config
-  namespace: workspace-system
-data:
-  domain: "SUBDOMAIN_REPLACE_ME"
-  parent-domain: "REPLACE_ME"
-  workspace-domain: "SUBDOMAIN_REPLACE_ME"

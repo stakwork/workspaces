@@ -9,7 +9,10 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-dns01-account-key
     solvers:
+    - http01:
+        ingress:
+          class: nginx
     - dns01:
         route53:
-          region: us-east-1  # Your AWS region
-          hostedZoneID: Z1RJN6NGLX1C37
+          region: ${AWS_REGION}
+          hostedZoneID: ${AWS_HOSTED_ZONE_ID}

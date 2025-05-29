@@ -297,10 +297,6 @@ resource "aws_efs_file_system" "workspace_efs" {
   }
 }
 
-data "aws_security_group" "eks_node_sg" {
-  id = "sg-0e46cfe9e2ee450e7"  # The actual security group ID of your nodes
-}
-
 resource "aws_security_group" "efs_sg" {
   name        = "workspace-efs-sg"
   description = "Allow NFS traffic from EKS nodes"
@@ -310,7 +306,7 @@ resource "aws_security_group" "efs_sg" {
     from_port       = 2049
     to_port         = 2049
     protocol        = "tcp"
-    security_groups = [data.aws_security_group.eks_node_sg.id]  # Use data reference here
+    security_groups = [aws_eks_cluster.workspace_cluster.vpc_config[0].cluster_security_group_id]
   }
 
   egress {

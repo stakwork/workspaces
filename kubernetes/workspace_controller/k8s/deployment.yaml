@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-controller
+  namespace: workspace-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workspace-controller
+  template:
+    metadata:
+      labels:
+        app: workspace-controller
+    spec:
+      containers:
+      - name: workspace-controller
+        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        volumeMounts:
+        - name: registry-storage
+          mountPath: /var/lib/registry
+      volumes:
+      - name: registry-storage
+        persistentVolumeClaim:
+          claimName: registry-storage
