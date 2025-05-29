@@ -60,6 +60,14 @@ envsubst < ./kubernetes/base/config/workspace-domain-settings.yaml > ./kubernete
 kubectl apply -f ./kubernetes/base/config/workspace-domain-settings-generated.yaml
 envsubst < ./kubernetes/base/ingress/workspace-ingress-admin.yaml > ./kubernetes/base/ingress/workspace-ingress-admin-generated.yaml
 kubectl apply -f ./kubernetes/base/ingress/workspace-ingress-admin-generated.yaml
+echo "Creating ClusterIssuer for cert-manager..."
+AWS_HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$DOMAIN" --query "HostedZones[0].Id" --output text | sed 's|/hostedzone/||')
+echo "Hosted Zone ID for $DOMAIN is: $AWS_HOSTED_ZONE_ID"
+export AWS_HOSTED_ZONE_ID AWS_REGION EFS_ID
+envsubst < ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml > ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
+kubectl apply -f ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
+
+
 envsubst < ./kubernetes/cert-manager/certificates/workspace-cert.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
 kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
 envsubst < ./kubernetes/cert-manager/certificates/workspace-cert-manager.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-manager-generated.yaml
@@ -70,12 +78,6 @@ kubectl apply -f ./kubernetes/port_detector/port-detector-configmap-generated.ya
 envsubst < ./kubernetes/base/service-accounts/workspace-service-account.yaml > ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml
 kubectl apply -f ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml
 
-echo "Creating ClusterIssuer for cert-manager..."
-AWS_HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$DOMAIN" --query "HostedZones[0].Id" --output text | sed 's|/hostedzone/||')
-echo "Hosted Zone ID for $DOMAIN is: $AWS_HOSTED_ZONE_ID"
-export AWS_HOSTED_ZONE_ID AWS_REGION EFS_ID
-envsubst < ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml > ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
-kubectl apply -f ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
 
 
 # Step 8: Verify AWS CLI identity
