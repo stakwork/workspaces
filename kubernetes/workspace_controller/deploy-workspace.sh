@@ -21,5 +21,6 @@ docker tag $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/workspace-controller:
 
 docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/workspace-controller:$TAG
 
-echo $TAG
+export DEPLOYMENT_TAG=$TAG
 
+envsubst < ./k8s/deployment.yaml > ./k8s/deployment-generated.yaml

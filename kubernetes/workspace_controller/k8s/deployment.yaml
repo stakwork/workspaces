@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: workspace-controller
-        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest
+        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:${DEPLOYMENT_TAG}
         imagePullPolicy: Always
         ports:
         - containerPort: 3000

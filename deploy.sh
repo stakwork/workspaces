@@ -165,6 +165,7 @@ fi
 
 # Generate deployment manifest with proper image name
 echo "Generating deployment manifest with image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/workspace-controller:latest"
+export DEPLOYMENT_TAG=latest
 envsubst < ./kubernetes/workspace_controller/k8s/deployment.yaml > ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
 echo "🚀 Deploying workspace controller..."
 kubectl apply -f ./kubernetes/workspace_controller/k8s/deployment-generated.yaml
