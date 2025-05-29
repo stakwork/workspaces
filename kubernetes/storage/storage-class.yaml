@@ -7,5 +7,5 @@ parameters:
   provisioningMode: efs-ap
   fileSystemId: ${EFS_ID}
   directoryPerms: "700"
-reclaimpOlicy: Retain
+reclaimPolicy: Retain
 volumeBindingMode: Immediate
