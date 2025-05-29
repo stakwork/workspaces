@@ -62,8 +62,9 @@ envsubst < ./kubernetes/base/ingress/workspace-ingress-admin.yaml > ./kubernetes
 kubectl apply -f ./kubernetes/base/ingress/workspace-ingress-admin-generated.yaml
 envsubst < ./kubernetes/cert-manager/certificates/workspace-cert.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
 kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-generated.yaml
-envsubst < ./kubernetes/cert-manager/certificates/workspace-cert-role.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-role-generated.yaml
-kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-role-generated.yaml
+envsubst < ./kubernetes/cert-manager/certificates/workspace-cert-manager.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-manager-generated.yaml
+kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-manager-generated.yaml
+
 envsubst < ./kubernetes/port_detector/port-detector-configmap.yaml > ./kubernetes/port_detector/port-detector-configmap-generated.yaml
 kubectl apply -f ./kubernetes/port_detector/port-detector-configmap-generated.yaml
 envsubst < ./kubernetes/base/service-accounts/workspace-service-account.yaml > ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml
