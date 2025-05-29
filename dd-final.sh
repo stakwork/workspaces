@@ -26,6 +26,16 @@ AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 AWS_REGION=${AWS_REGION:-us-east-1}
 export AWS_ACCOUNT_ID AWS_REGION EFS_ID
 
+# Step 3: Configure kubectl for EKS
+echo "Step 3: Configuring kubectl..."
+aws eks update-kubeconfig --region "$AWS_REGION" --name workspace-cluster
+
+# Step 5: Create namespaces
+echo "Step 5: Creating namespaces..."
+for ns in workspace-system monitoring ingress-nginx external-dns; do
+  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+done
+
 # Step 11: Install NGINX Ingress Controller with Helm
 echo "Step 11: Installing NGINX Ingress Controller..."
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx || true
@@ -58,10 +68,6 @@ echo "Hosted Zone ID for $DOMAIN is: $AWS_HOSTED_ZONE_ID"
 export AWS_HOSTED_ZONE_ID AWS_REGION EFS_ID
 envsubst < ./kubernetes/cert-manager/issuers/workspace-cluster-issuer.yaml > ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
 kubectl apply -f ./kubernetes/cert-manager/issuers/workspace-cluster-issuer-generated.yaml
-
-# Step 3: Configure kubectl for EKS
-echo "Step 3: Configuring kubectl..."
-aws eks update-kubeconfig --region "$AWS_REGION" --name workspace-cluster
 
 # Step 4: Wait for nodes to be ready
 echo "⏳ Waiting for all nodes to be ready..."
