@@ -8,6 +8,7 @@ import yaml
 import string
 import random
 import logging
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from kubernetes import client, config
@@ -41,12 +42,13 @@ try:
     PARENT_DOMAIN = config_map.data.get("parent-domain", "REPLACE_ME")
     WORKSPACE_DOMAIN = config_map.data.get("workspace-domain", "SUBDOMAIN_REPLACE_ME")
     AWS_ACCOUNT_ID = config_map.data.get("aws-account-id", "AWS_ACCOUNT_ID")
-    logger.info(f"Using domain: {DOMAIN}, parent domain: {PARENT_DOMAIN}, workspace domain: {WORKSPACE_DOMAIN}, AWS account ID: {AWS_ACCOUNT_ID}")
+    logger.info(f"Using domain: {DOMAIN}, parent domain: {PARENT_DOMAIN}, workspace domain: {WORKSPACE_DOMAIN}")
 except Exception as e:
     logger.error(f"Error reading config map: {e}")
     DOMAIN = "SUBDOMAIN_REPLACE_ME"
     PARENT_DOMAIN = "REPLACE_ME"
     WORKSPACE_DOMAIN = "SUBDOMAIN_REPLACE_ME"
+    AWS_ACCOUNT_ID = "AWS_ACCOUNT_ID_REPLACE_ME"
 
 def generate_random_subdomain(length=8):
     """Generate a random subdomain name"""
@@ -167,7 +169,11 @@ def _create_post_start_command():
             fi
 
             # Install common dependencies
-            apt-get update -y
+            apt-get update -y || {
+                echo "WARNING: apt-get update failed, retrying with a delay"
+                sleep 5
+                apt-get update -y || echo "WARNING: apt-get update failed again, proceeding anyway"
+            }
             apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release git
 
             # Check and install any extensions from devcontainer.json if not already installed
@@ -178,6 +184,55 @@ def _create_post_start_command():
 
             echo "Installing Docker for $OS $VERSION_CODENAME"
             
+            # Function to check if Docker is running
+            docker_running() {
+                docker info &>/dev/null
+            }
+            
+            # Function to check if Docker CLI is installed
+            docker_installed() {
+                command -v docker &>/dev/null
+            }
+            
+            # Function to start Docker daemon
+            start_docker_daemon() {
+                echo "Starting Docker daemon"
+                mkdir -p /var/run/docker
+                chown root:docker /var/run/docker
+                chmod 770 /var/run/docker
+                
+                # Check if dockerd is already running
+                if pgrep dockerd; then
+                    echo "Docker daemon is already running"
+                    return 0
+                fi
+                
+                # Start Docker daemon
+                dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --storage-driver=overlay2 &
+                DOCKER_PID=$!
+                echo "Docker daemon started with PID: $DOCKER_PID"
+                
+                # Wait for Docker to start
+                timeout=30
+                while ! docker_running; do
+                    echo "Waiting for docker to start..."
+                    if [ $timeout -le 0 ]; then
+                        echo "Docker daemon failed to start"
+                        return 1
+                    fi
+                    timeout=$((timeout - 1))
+                    sleep 1
+                done
+                
+                # Set proper permissions on Docker socket
+                echo "Setting Docker socket permissions"
+                chown root:docker /var/run/docker.sock
+                chmod 666 /var/run/docker.sock
+                
+                return 0
+            }
+            
+            # Install Docker based on distribution
             if [ "$OS" = "debian" ]; then
                 # Debian-specific Docker installation
                 echo "Setting up Docker for Debian $VERSION_CODENAME"
@@ -221,45 +276,19 @@ def _create_post_start_command():
             docker --version || echo "Docker command not found"
             
             # Setup Docker user and permissions
+            echo "Setting up Docker group and permissions"
             groupadd -f docker
             getent passwd abc > /dev/null && usermod -aG docker abc
+            getent passwd coder > /dev/null && usermod -aG docker coder
+            getent passwd vscode > /dev/null && usermod -aG docker vscode
             
-            mkdir -p /var/run/docker
-            chown root:docker /var/run/docker
-            chmod 770 /var/run/docker
-
-            # Start the Docker daemon
-            echo "Starting Docker daemon"
-            dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --storage-driver=overlay2 &
-            DOCKER_PID=$!
-
-            echo "Docker daemon started with PID: $DOCKER_PID"
+            # Start the Docker daemon if not already running
+            if ! docker_running; then
+                start_docker_daemon
+            fi
             
-            # Wait for Docker to start
-            timeout=30
-            while ! docker info &>/dev/null; do
-                echo "Waiting for docker to start..."
-                if [ $timeout -le 0 ]; then
-                    echo "Docker daemon failed to start"
-                    break
-                fi
-                timeout=$(($timeout - 1))
-                sleep 1
-            done
-
-            # Set proper permissions on Docker socket
-            echo "Setting Docker socket permissions"
-            chown root:docker /var/run/docker.sock
-            chmod 666 /var/run/docker.sock
-
-            # Install Docker Compose
-            echo "Installing Docker Compose"
-            curl -L "https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
-            echo "Docker Compose installed:"
-            docker-compose --version || echo "Docker Compose installation failed"
-            
-            if docker info &>/dev/null; then
+            # Verify Docker is working
+            if docker_running; then
                 echo "Docker daemon started successfully"
                 # Pull a few common images to speed up future operations
                 echo "Pulling common Docker images in background"
@@ -268,6 +297,41 @@ def _create_post_start_command():
                 docker pull python:3-slim &>/dev/null &
             else
                 echo "WARNING: Docker daemon is not running properly"
+                echo "Trying to fix Docker setup..."
+                
+                # Try to fix Docker setup
+                pkill dockerd
+                sleep 2
+                rm -f /var/run/docker.pid
+                rm -f /var/run/docker.sock
+                
+                start_docker_daemon
+                
+                if docker_running; then
+                    echo "Docker fixed and is now running"
+                else
+                    echo "WARNING: Could not fix Docker, it may not be available"
+                fi
+            fi
+            
+            # Install Docker Compose if not already installed
+            if ! command -v docker-compose &>/dev/null; then
+                echo "Installing Docker Compose"
+                mkdir -p /usr/local/lib/docker/cli-plugins
+                COMPOSE_VERSION="v2.24.6"
+                curl -SL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
+                chmod +x /usr/local/bin/docker-compose
+                ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+                echo "Docker Compose installed:"
+                docker-compose --version || echo "Docker Compose installation failed"
+            fi
+            
+            # Execute feature installation if the script exists
+            if [ -f /workspaces/install-features.sh ]; then
+                echo "Running feature installation script"
+                /workspaces/install-features.sh
+            else
+                echo "No feature installation script found"
             fi
             
             echo "Post-start initialization completed at $(date)"
@@ -467,10 +531,323 @@ def _create_workspace_secret(workspace_ids):
     core_v1.create_namespaced_secret(workspace_ids['namespace_name'], secret)
     logger.info(f"Created secret in namespace: {workspace_ids['namespace_name']}")
 
+def _create_feature_installation_script():
+    """Generate a script that handles common dev container features installation"""
+    return """#!/bin/bash
+# Script to install common dev container features
+set -e
+
+FEATURES_FILE="/workspaces/.devcontainer-features"
+if [ ! -f "$FEATURES_FILE" ]; then
+    echo "No features file found, skipping feature installation"
+    exit 0
+fi
+
+echo "Installing dev container features from features file"
+echo "Features content:"
+cat "$FEATURES_FILE"
+
+# Convert features file to JSON for easier parsing
+FEATURES_JSON=$(cat "$FEATURES_FILE")
+
+# Helper function to check if a feature exists
+feature_exists() {
+    echo "$FEATURES_JSON" | grep -q "\"$1\""
+}
+
+# Helper to extract feature version/options
+get_feature_option() {
+    local feature=$1
+    local option=$2
+    local default=$3
+    
+    # Try to extract the version or option using grep and sed
+    # Format is typically "feature": { "version": "value", "optionName": "value" }
+    result=$(echo "$FEATURES_JSON" | grep -o "\"$feature\"[^}]*" | grep -o "\"$option\"[^,}]*" | grep -o "\"[^\"]*\"$" | tr -d '"' || echo "")
+    
+    if [ -z "$result" ]; then
+        echo "$default"
+    else
+        echo "$result"
+    fi
+}
+
+# Install Docker feature
+if feature_exists "docker"; then
+    echo "Installing Docker feature"
+    # Docker is already installed by the post-start script
+    echo "✓ Docker already configured"
+fi
+
+# Install Docker-in-Docker feature (alternative to Docker)
+if feature_exists "docker-in-docker" || feature_exists "docker-from-docker"; then
+    echo "Installing Docker-in-Docker feature"
+    # Docker is already installed by the post-start script
+    echo "✓ Docker already configured via post-start script"
+    
+    # Add Docker Compose v2 if not already added
+    if ! command -v docker-compose &> /dev/null; then
+        echo "Installing Docker Compose v2"
+        mkdir -p /usr/local/lib/docker/cli-plugins
+        curl -SL "https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-$(uname -m)" -o /usr/local/lib/docker/cli-plugins/docker-compose
+        chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+        ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+        echo "✓ Docker Compose installed: $(docker-compose version)"
+    fi
+fi
+
+# Install Node.js feature
+if feature_exists "node"; then
+    echo "Installing Node.js feature"
+    VERSION=$(get_feature_option "node" "version" "lts")
+    
+    # Install Node.js using NVM
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    
+    if [ "$VERSION" = "lts" ] || [ "$VERSION" = "latest" ]; then
+        nvm install --lts
+    else
+        nvm install "$VERSION"
+    fi
+    
+    # Add NVM to shell initialization
+    echo 'export NVM_DIR="$HOME/.nvm"' >> /etc/profile.d/nvm.sh
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> /etc/profile.d/nvm.sh
+    
+    echo "✓ Node.js $(node -v) installed"
+fi
+
+# Install Python feature
+if feature_exists "python"; then
+    echo "Installing Python feature"
+    VERSION=$(get_feature_option "python" "version" "3.10")
+    INSTALL_TOOLS=$(get_feature_option "python" "installTools" "true")
+    INSTALL_JUPYTER=$(get_feature_option "python" "installJupyter" "false")
+    
+    # Install Python with apt
+    apt-get update
+    apt-get install -y python3 python3-pip python3-venv
+    
+    # Create symbolic links
+    ln -sf /usr/bin/python3 /usr/bin/python
+    
+    echo "✓ Python $(python3 --version) installed"
+    
+    # Install common tools if requested
+    if [ "$INSTALL_TOOLS" = "true" ]; then
+        echo "Installing Python tools"
+        pip3 install --no-cache-dir ipython pytest pylint flake8 black
+        echo "✓ Common Python tools installed"
+    fi
+    
+    # Install Jupyter if requested
+    if [ "$INSTALL_JUPYTER" = "true" ]; then
+        echo "Installing Jupyter"
+        pip3 install --no-cache-dir jupyter notebook
+        echo "✓ Jupyter installed"
+    fi
+fi
+
+# Install Go feature
+if feature_exists "go"; then
+    echo "Installing Go feature"
+    VERSION=$(get_feature_option "go" "version" "latest")
+    
+    if [ "$VERSION" = "latest" ]; then
+        VERSION=$(curl -s https://go.dev/VERSION?m=text | head -n1)
+    fi
+    
+    # Download and install Go
+    curl -sSL "https://golang.org/dl/${VERSION}.linux-amd64.tar.gz" -o go.tar.gz
+    tar -C /usr/local -xzf go.tar.gz
+    rm go.tar.gz
+    
+    # Add Go to PATH
+    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+    echo 'export PATH=$PATH:$HOME/go/bin' >> /etc/profile.d/go.sh
+    
+    # Set up environment for current session
+    export PATH=$PATH:/usr/local/go/bin
+    
+    echo "✓ Go $(go version) installed"
+fi
+
+# Install Java feature
+if feature_exists "java"; then
+    echo "Installing Java feature"
+    VERSION=$(get_feature_option "java" "version" "17")
+    
+    # Install OpenJDK
+    apt-get update
+    apt-get install -y openjdk-${VERSION}-jdk
+    
+    echo "✓ Java $(java -version 2>&1 | head -n 1) installed"
+fi
+
+# Install Rust feature
+if feature_exists "rust"; then
+    echo "Installing Rust feature"
+    
+    # Install Rust using rustup
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    
+    # Add Rust to PATH
+    echo 'export PATH=$PATH:$HOME/.cargo/bin' > /etc/profile.d/rust.sh
+    
+    # Set up environment for current session
+    export PATH=$PATH:$HOME/.cargo/bin
+    
+    echo "✓ Rust $(rustc --version) installed"
+fi
+
+# Install .NET feature
+if feature_exists "dotnet"; then
+    echo "Installing .NET feature"
+    VERSION=$(get_feature_option "dotnet" "version" "latest")
+    
+    # Install .NET SDK
+    apt-get update
+    apt-get install -y wget
+    
+    if [ "$VERSION" = "latest" ]; then
+        wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+        chmod +x dotnet-install.sh
+        ./dotnet-install.sh
+    else
+        wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+        chmod +x dotnet-install.sh
+        ./dotnet-install.sh --version $VERSION
+    fi
+    
+    # Add .NET to PATH
+    echo 'export PATH=$PATH:$HOME/.dotnet' > /etc/profile.d/dotnet.sh
+    
+    # Set up environment for current session
+    export PATH=$PATH:$HOME/.dotnet
+    
+    echo "✓ .NET installed"
+fi
+
+# Install PHP feature
+if feature_exists "php"; then
+    echo "Installing PHP feature"
+    VERSION=$(get_feature_option "php" "version" "8.2")
+    COMPOSER=$(get_feature_option "php" "composer" "true")
+    
+    # Install PHP
+    apt-get update
+    apt-get install -y software-properties-common
+    add-apt-repository -y ppa:ondrej/php
+    apt-get update
+    apt-get install -y php${VERSION} php${VERSION}-cli php${VERSION}-common php${VERSION}-curl php${VERSION}-mbstring php${VERSION}-mysql php${VERSION}-xml php${VERSION}-zip
+    
+    # Install Composer if requested
+    if [ "$COMPOSER" = "true" ]; then
+        echo "Installing Composer"
+        curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+        echo "✓ Composer installed: $(composer --version)"
+    fi
+    
+    echo "✓ PHP installed: $(php -v | head -n 1)"
+fi
+
+# Install common utilities
+if feature_exists "common-utils"; then
+    echo "Installing common utilities"
+    
+    apt-get update
+    apt-get install -y wget curl vim git jq unzip zip sudo 
+    apt-get install -y build-essential pkg-config libssl-dev
+    
+    echo "✓ Common utilities installed"
+fi
+
+# Install GitHub CLI
+if feature_exists "github-cli"; then
+    echo "Installing GitHub CLI"
+    
+    # Install GitHub CLI
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+    apt-get update
+    apt-get install -y gh
+    
+    echo "✓ GitHub CLI $(gh --version | head -n 1) installed"
+fi
+
+# Install Azure CLI
+if feature_exists "azure-cli"; then
+    echo "Installing Azure CLI"
+    
+    curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+    
+    echo "✓ Azure CLI $(az --version | head -n 1) installed"
+fi
+
+# Install AWS CLI
+if feature_exists "aws-cli"; then
+    echo "Installing AWS CLI"
+    
+    apt-get update
+    apt-get install -y unzip
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip awscliv2.zip
+    ./aws/install
+    rm -rf aws awscliv2.zip
+    
+    echo "✓ AWS CLI $(aws --version) installed"
+fi
+
+# Install Terraform
+if feature_exists "terraform"; then
+    echo "Installing Terraform"
+    VERSION=$(get_feature_option "terraform" "version" "latest")
+    
+    apt-get update
+    apt-get install -y gnupg software-properties-common curl
+    
+    curl -fsSL https://apt.releases.hashicorp.com/gpg | apt-key add -
+    apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+    apt-get update
+    
+    if [ "$VERSION" = "latest" ]; then
+        apt-get install -y terraform
+    else
+        apt-get install -y terraform=$VERSION
+    fi
+    
+    echo "✓ Terraform $(terraform version | head -n 1) installed"
+fi
+
+# Install kubectl
+if feature_exists "kubectl" || feature_exists "kubernetes-tools"; then
+    echo "Installing kubectl"
+    VERSION=$(get_feature_option "kubectl" "version" "latest")
+    
+    if [ "$VERSION" = "latest" ]; then
+        VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+    fi
+    
+    curl -LO "https://dl.k8s.io/release/$VERSION/bin/linux/amd64/kubectl"
+    chmod +x kubectl
+    mv kubectl /usr/local/bin/
+    
+    echo "✓ kubectl $(kubectl version --client -o json | jq -r '.clientVersion.gitVersion') installed"
+fi
+
+echo "Feature installation completed"
+"""
+
 def _create_init_script_configmap(workspace_ids, workspace_config):
     """Create ConfigMap with initialization scripts"""
     # Start with base repository cloning script
     init_script = _generate_init_script(workspace_ids, workspace_config)
+    
+    namespace_name = workspace_ids['namespace_name']
+    repo_name = workspace_config['repo_name']
 
     # Add code to create a wrapper Dockerfile that uses the user's Dockerfile as a base
     init_script += f"""
@@ -480,10 +857,14 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     cd /workspaces/.code-server-wrapper
     
     # Locate the user's Dockerfile in their repo
-    USER_REPO_PATH="/workspaces/{workspace_config['repo_name']}"
+    USER_REPO_PATH="/workspaces/{repo_name}"
     DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
     DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
     
+    """
+    
+    # Continuing the script
+    init_script += """
     # Debug info
     echo "DEBUG: Checking repository and Dockerfile"
     if [ -d "$USER_REPO_PATH" ]; then
@@ -514,41 +895,46 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     else
         echo "DEBUG: devcontainer.json does not exist at $DEVCONTAINER_JSON_PATH"
     fi
+    """
     
+    # Clone repository if needed
+    init_script += f"""
     # Check if the first repository actually got cloned
     if [ ! -d "$USER_REPO_PATH" ]; then
         echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
         cd /workspaces
-        git clone {workspace_config['github_urls'][0]} {workspace_config['repo_name']}
+        git clone {workspace_config['github_urls'][0]} {repo_name}
     fi
+    """
     
+    # Main processing script
+    init_script += """
     # Check again after potential re-cloning
     if [ -f "$DOCKERFILE_PATH" ]; then
         echo "Found user Dockerfile at $DOCKERFILE_PATH"
         # Copy the user's Dockerfile
         cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
         
-        # Check if there's a devcontainer.json file
-        if [ -f "$USER_REPO_PATH/.devcontainer/devcontainer.json" ]; then
-            echo "Found devcontainer.json - copying to build context"
-            cp "$USER_REPO_PATH/.devcontainer/devcontainer.json" /workspaces/.user-dockerfile/
-        fi
-
-        # Check if there's a devcontainer.json file and parse extensions
+        # Process devcontainer.json if it exists
         if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
-            echo "Found devcontainer.json - copying to build context"
+            echo "Found devcontainer.json - processing configuration"
+            
+            # Copy the devcontainer.json file to the build context
             cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
             
-            # Extract extensions from devcontainer.json
-            if command -v jq &> /dev/null; then
-                echo "jq found, using it to extract extensions"
-                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]?' "$DEVCONTAINER_JSON_PATH" 2>/dev/null || echo "")
-            else
+            # Install jq if needed for JSON processing
+            if ! command -v jq &> /dev/null; then
                 echo "Installing jq to parse devcontainer.json"
                 apt-get update && apt-get install -y jq
-                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]?' "$DEVCONTAINER_JSON_PATH" 2>/dev/null || echo "")
             fi
             
+            # Extract extensions from devcontainer.json (support both formats)
+            EXTENSIONS=$(jq -r '.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ -z "$EXTENSIONS" ]; then
+                EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            fi
+            
+            # Save extensions to file if found
             if [ ! -z "$EXTENSIONS" ]; then
                 echo "Found extensions in devcontainer.json:"
                 echo "$EXTENSIONS"
@@ -557,7 +943,89 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
                 echo "No extensions found in devcontainer.json or couldn't parse"
             fi
             
-            # Create a script to install the extensions during container startup
+            # Extract VS Code settings
+            SETTINGS=$(jq -r '.settings // .customizations.vscode.settings // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$SETTINGS" ]; then
+                echo "Found VS Code settings in devcontainer.json"
+                mkdir -p /workspaces/.vscode
+                echo "$SETTINGS" > /workspaces/.vscode/settings.json
+            fi
+            
+            # Extract features
+            FEATURES=$(jq -r '.features // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$FEATURES" ]; then
+                echo "Found features in devcontainer.json:"
+                echo "$FEATURES" > /workspaces/.devcontainer-features
+                echo "Features will be installed during workspace initialization"
+            fi
+            
+            # Extract port forwarding configuration
+            PORTS=$(jq -r '.forwardPorts[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$PORTS" ]; then
+                echo "Found ports to forward in devcontainer.json:"
+                echo "$PORTS"
+                echo "$PORTS" > /workspaces/.forward-ports
+            fi
+            
+            # Extract other customizations
+            CUSTOMIZATIONS=$(jq -r '.customizations // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$CUSTOMIZATIONS" ]; then
+                echo "Found customizations in devcontainer.json"
+                echo "$CUSTOMIZATIONS" > /workspaces/.customizations
+            fi
+            
+            # Extract environment variables
+            ENV_VARS=$(jq -r '.containerEnv // empty | to_entries[] | "\\(.key)=\\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$ENV_VARS" ]; then
+                echo "Found environment variables in devcontainer.json:"
+                echo "$ENV_VARS"
+                echo "$ENV_VARS" > /workspaces/.container-env
+            fi
+            
+            # Extract remote environment variables
+            REMOTE_ENV_VARS=$(jq -r '.remoteEnv // empty | to_entries[] | "\\(.key)=\\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$REMOTE_ENV_VARS" ]; then
+                echo "Found remote environment variables in devcontainer.json:"
+                echo "$REMOTE_ENV_VARS"
+                echo "$REMOTE_ENV_VARS" > /workspaces/.remote-env
+            fi
+            
+            # Extract user configuration
+            REMOTE_USER=$(jq -r '.remoteUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            CONTAINER_USER=$(jq -r '.containerUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            
+            if [ ! -z "$REMOTE_USER" ] || [ ! -z "$CONTAINER_USER" ]; then
+                echo "Found user configuration in devcontainer.json"
+                
+                if [ ! -z "$REMOTE_USER" ]; then
+                    echo "remoteUser: $REMOTE_USER"
+                    echo "REMOTE_USER=$REMOTE_USER" > /workspaces/.user-config
+                fi
+                
+                if [ ! -z "$CONTAINER_USER" ]; then
+                    echo "containerUser: $CONTAINER_USER"
+                    echo "CONTAINER_USER=$CONTAINER_USER" >> /workspaces/.user-config
+                fi
+            fi
+            
+            # Extract lifecycle commands
+            POST_CREATE_CMD=$(jq -r '.postCreateCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$POST_CREATE_CMD" ]; then
+                echo "Found postCreateCommand in devcontainer.json"
+                echo "#!/bin/bash" > /workspaces/post-create-command.sh
+                echo "$POST_CREATE_CMD" >> /workspaces/post-create-command.sh
+                chmod +x /workspaces/post-create-command.sh
+            fi
+            
+            POST_START_CMD=$(jq -r '.postStartCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            if [ ! -z "$POST_START_CMD" ]; then
+                echo "Found postStartCommand in devcontainer.json"
+                echo "#!/bin/bash" > /workspaces/post-start-command.sh
+                echo "$POST_START_CMD" >> /workspaces/post-start-command.sh
+                chmod +x /workspaces/post-start-command.sh
+            fi
+            
+            # Create a comprehensive extension installation script
             echo "Creating extension installation script"
             cat > /workspaces/install-extensions.sh << 'EOL'
 #!/bin/bash
@@ -565,18 +1033,181 @@ EXTENSIONS_FILE="/workspaces/.extensions-list"
 
 if [ -f "$EXTENSIONS_FILE" ]; then
   echo "Installing extensions from devcontainer.json..."
+  
+  # Create cache directory for extensions
+  mkdir -p /workspaces/.vscode-extensions-cache
+  
+  # Function to install extension with better error handling and caching
+  install_extension() {
+    local extension="$1"
+    local extension_id="${extension##*/}"  # Get last part after slash for GitHub URLs
+    local cache_file="/workspaces/.vscode-extensions-cache/${extension_id}.vsix"
+    
+    echo "Installing extension: $extension"
+    
+    # Check if it's a GitHub URL or extension ID
+    if [[ "$extension" == *"github.com"* ]] || [[ "$extension" == *"http://"* ]] || [[ "$extension" == *"https://"* ]]; then
+      # It's a URL, download it if not cached
+      if [ ! -f "$cache_file" ]; then
+        echo "Downloading extension from URL: $extension"
+        if curl -sL "$extension" -o "$cache_file"; then
+          echo "Download successful"
+        else
+          echo "Failed to download extension from URL"
+          return 1
+        fi
+      else
+        echo "Using cached extension file"
+      fi
+      
+      # Install from downloaded file
+      if code-server --install-extension "$cache_file"; then
+        echo "Successfully installed extension from file: $extension_id"
+        return 0
+      else
+        echo "Failed to install extension from file: $extension_id"
+        # Delete cache file to force re-download next time
+        rm -f "$cache_file"
+        return 1
+      fi
+    else
+      # Standard extension ID from marketplace
+      # Try up to 3 times with increasing delays
+      for i in 1 2 3; do
+        if code-server --install-extension "$extension"; then
+          echo "Successfully installed: $extension"
+          return 0
+        else
+          echo "Attempt $i failed to install: $extension"
+          if [ $i -lt 3 ]; then
+            sleep_time=$((i * 5))
+            echo "Retrying in $sleep_time seconds..."
+            sleep $sleep_time
+          else
+            echo "Failed to install extension after 3 attempts: $extension"
+            return 1
+          fi
+        fi
+      done
+    fi
+    
+    return 1
+  }
+  
+  # Install all extensions
   while IFS= read -r extension; do
     if [ ! -z "$extension" ]; then
-      echo "Installing extension: $extension"
-      code-server --install-extension "$extension" || echo "Failed to install: $extension"
+      # Trim any extra whitespace or quotes
+      extension=$(echo "$extension" | tr -d '"' | tr -d "'" | xargs)
+      install_extension "$extension"
     fi
   done < "$EXTENSIONS_FILE"
+  
+  # Report installation results
+  echo "=== Extension Installation Report ==="
+  echo "Installed extensions:"
+  code-server --list-extensions
+  echo "========================================="
   echo "Finished installing extensions"
 else
   echo "No extensions list found"
 fi
 EOL
             chmod +x /workspaces/install-extensions.sh
+
+            # Create a script to apply environment variables
+            echo "Creating environment setup script"
+            cat > /workspaces/setup-env.sh << 'EOL'
+#!/bin/bash
+# Apply container environment variables
+if [ -f "/workspaces/.container-env" ]; then
+  echo "Applying container environment variables"
+  while IFS= read -r env_var; do
+    if [ ! -z "$env_var" ]; then
+      export "$env_var"
+      echo "Exported: $env_var"
+    fi
+  done < "/workspaces/.container-env"
+fi
+
+# Apply remote environment variables
+if [ -f "/workspaces/.remote-env" ]; then
+  echo "Applying remote environment variables"
+  while IFS= read -r env_var; do
+    if [ ! -z "$env_var" ]; then
+      export "$env_var"
+      echo "Exported: $env_var"
+    fi
+  done < "/workspaces/.remote-env"
+fi
+
+# Apply user configuration
+if [ -f "/workspaces/.user-config" ]; then
+  echo "Applying user configuration from devcontainer.json"
+  source /workspaces/.user-config
+  
+  # Note: Full user switching would require more complex handling
+  # This is just setting environment variables for reference
+  if [ ! -z "$REMOTE_USER" ]; then
+    echo "Remote user set to: $REMOTE_USER"
+  fi
+  
+  if [ ! -z "$CONTAINER_USER" ]; then
+    echo "Container user set to: $CONTAINER_USER"
+  fi
+fi
+EOL
+            chmod +x /workspaces/setup-env.sh
+            
+            # Create a script to run lifecycle commands
+            echo "Creating lifecycle script"
+            cat > /workspaces/run-lifecycle.sh << 'EOL'
+#!/bin/bash
+# Run post-create command if it exists
+if [ -f "/workspaces/post-create-command.sh" ]; then
+  echo "Running postCreateCommand..."
+  /workspaces/post-create-command.sh
+fi
+
+# Run post-start command if it exists
+if [ -f "/workspaces/post-start-command.sh" ]; then
+  echo "Running postStartCommand..."
+  /workspaces/post-start-command.sh
+fi
+
+# Set up VS Code settings if they exist
+if [ -f "/workspaces/.vscode/settings.json" ]; then
+  echo "Applying VS Code settings..."
+  mkdir -p /config/data/User
+  cp /workspaces/.vscode/settings.json /config/data/User/settings.json
+fi
+
+# Handle port forwarding if configured
+if [ -f "/workspaces/.forward-ports" ]; then
+  echo "Setting up port forwarding..."
+  # Note: The actual port forwarding is handled by the Kubernetes ingress
+  # This is just for informational purposes
+  cat /workspaces/.forward-ports
+fi
+EOL
+            chmod +x /workspaces/run-lifecycle.sh
+    """
+    
+    # Add the feature installation script directly
+    feature_script = _create_feature_installation_script()
+    init_script += """
+            # Create features installation script
+            echo "Creating features installation script"
+            cat > /workspaces/install-features.sh << 'EOL'
+"""
+    init_script += feature_script
+    init_script += """
+EOL
+            chmod +x /workspaces/install-features.sh
+    """
+    
+    # Continue with the rest of the script
+    init_script += """
         fi
         
         # Check if there's a docker-compose.yml file
@@ -595,11 +1226,14 @@ EOL
         echo "Using default Go dev container image instead"
         echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
     fi
+    """
     
+    # Add Dockerfile creation
+    init_script += f"""
     # Create a wrapper Dockerfile that uses the user's image as a base
     cat > Dockerfile << 'EOF'
 # This will be replaced with the tag for the user's custom image
-FROM {AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}
+FROM {AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{namespace_name}
 
 # Install code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh
@@ -608,12 +1242,8 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 EXPOSE 8443
 
 # Set up entrypoint to run code-server
-#ENTRYPOINT ["/usr/bin/code-server", "--bind-addr", "0.0.0.0:8443", "--auth", "password"]
-ENTRYPOINT ["/bin/sh", "-c", "if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password"]
-CMD ["--user-data-dir", "/config/data", "--extensions-dir", "/config/extensions", "/workspaces"]
+ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
 EOF
-    
-    echo "Created wrapper Dockerfile for code-server"
     
     # Create a flag file to indicate setup is done
     touch /workspaces/.code-server-initialized
@@ -1027,8 +1657,8 @@ def _create_workspace_init_container():
     """Create the main workspace initialization container"""
     return client.V1Container(
         name="init-workspace",
-        image="alpine/git",
-        command=["/bin/sh", "/scripts/init.sh"],
+        image="buildpack-deps:22.04-scm",
+        command=["/bin/bash", "/scripts/init.sh"],
         security_context=client.V1SecurityContext(
             capabilities=client.V1Capabilities(
                 add=["CHOWN", "FOWNER", "FSETID", "DAC_OVERRIDE"]
@@ -1205,11 +1835,6 @@ def _create_code_server_container(workspace_ids, workspace_config):
         name="code-server",
         image=f"{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}",
         image_pull_policy=image_pull_policy,
-        args=[
-            "--user-data-dir", "/config/data",
-            "--extensions-dir", "/config/extensions",
-            "/workspaces"
-        ],
         ports=[
             client.V1ContainerPort(container_port=8443)
         ],
