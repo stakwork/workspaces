@@ -1,6 +1,6 @@
 import json
 import base64
-import socket
+import time
 import os
 import json
 import uuid
@@ -465,6 +465,7 @@ def _extract_workspace_config(data):
 
 def _generate_workspace_identifiers():
     """Generate unique identifiers for the workspace"""
+    build_timestamp = int(time.time())
     workspace_id = str(uuid.uuid4())[:8]
     subdomain = generate_random_subdomain()
     namespace_name = f"workspace-{workspace_id}"
@@ -476,6 +477,7 @@ def _generate_workspace_identifiers():
         'subdomain': subdomain,
         'namespace_name': namespace_name,
         'fqdn': fqdn,
+        'build_timestamp': build_timestamp,
         'password': password
     }
 
@@ -1233,7 +1235,7 @@ EOL
     # Create a wrapper Dockerfile that uses the user's image as a base
     cat > Dockerfile << 'EOF'
 # This will be replaced with the tag for the user's custom image
-FROM {AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{namespace_name}
+FROM {AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}
 
 # Install code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh
@@ -1590,7 +1592,9 @@ def _create_deployment(workspace_ids, workspace_config):
                     },
                     annotations={
                         # Add this to allow insecure registry
-                        "container.apparmor.security.beta.kubernetes.io/code-server": "unconfined"
+                        "container.apparmor.security.beta.kubernetes.io/code-server": "unconfined",
+                        "deployment.kubernetes.io/revision": str(int(time.time())),
+                        "kubectl.kubernetes.io/restartedAt": str(int(time.time()))
                     }
                 ),
                 spec=client.V1PodSpec(
@@ -1714,7 +1718,7 @@ def _create_base_image_kaniko_container(workspace_ids):
         args=[
             "--dockerfile=/workspace/Dockerfile",
             "--context=/workspace",
-            f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}",
+            f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",
             "--skip-tls-verify"
         ],
@@ -1739,7 +1743,7 @@ def _create_wrapper_kaniko_container(workspace_ids):
         args=[
             "--dockerfile=/workspace/Dockerfile",
             "--context=/workspace",
-            f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}",
+            f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",
             "--skip-tls-verify"
         ],
@@ -1833,7 +1837,7 @@ def _create_code_server_container(workspace_ids, workspace_config):
 
     return client.V1Container(
         name="code-server",
-        image=f"{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}",
+        image=f"{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
         image_pull_policy=image_pull_policy,
         ports=[
             client.V1ContainerPort(container_port=8443)
