@@ -338,13 +338,21 @@ def _create_post_start_command():
             echo "Checking for port conflicts..."
             if netstat -tuln | grep -q ':8443 '; then
                 echo "WARNING: Port 8443 is already in use!"
-                echo "Finding an available port for code-server..."
-                for port in 8444 8445 8446 8447 8448; do
-                    if ! netstat -tuln | grep -q ":$port "; then
-                        echo "Found available port: $port"
-                        break
+                echo "Attempting to free up port 8443 for code-server..."
+                # Try to identify and stop the process using port 8443
+                PID=$(lsof -t -i:8443 2>/dev/null || netstat -tulpn 2>/dev/null | grep ':8443 ' | awk '{print $7}' | cut -d'/' -f1)
+                if [ ! -z "$PID" ]; then
+                    echo "Found process $PID using port 8443, attempting to terminate..."
+                    kill -15 $PID 2>/dev/null || kill -9 $PID 2>/dev/null || true
+                    sleep 2
+                    if netstat -tuln | grep -q ':8443 '; then
+                        echo "WARNING: Port 8443 still in use after termination attempt"
+                    else
+                        echo "Successfully freed port 8443"
                     fi
-                done
+                else
+                    echo "Could not identify the process using port 8443"
+                fi
             else
                 echo "Port 8443 is available for code-server"
             fi
@@ -1426,7 +1434,7 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 EXPOSE 8443
 
 # Set up entrypoint to run code-server - using shell format instead of array format to avoid parsing issues
-ENTRYPOINT /bin/bash -c "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh; fi && pkill -f code-server || true && AVAILABLE_PORT='' && for port in 8443 8444 8445 8446 8447 8448; do if ! netstat -tuln | grep -q \":$port \"; then AVAILABLE_PORT=$port; echo \"Starting code-server on port $AVAILABLE_PORT\" && break; fi; done && if [ -z \"$AVAILABLE_PORT\" ]; then echo \"ERROR: No available ports found in range 8443-8448\" && exit 1; else exec /usr/bin/code-server --bind-addr 0.0.0.0:$AVAILABLE_PORT --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces; fi"
+ENTRYPOINT /bin/bash -c "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh; fi && echo 'Stopping any existing code-server processes...' && pkill -f code-server || true && echo 'Waiting for port 8443 to be available...' && while netstat -tuln | grep -q ':8443 '; do echo 'Port 8443 still in use, waiting 1 second...' && sleep 1; done && echo 'Starting code-server on port 8443' && exec /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"
 EOF
     
     # Create a flag file to indicate setup is done
