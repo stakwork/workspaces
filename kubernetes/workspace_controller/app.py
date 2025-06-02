@@ -1425,8 +1425,8 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 # Expose default code-server port
 EXPOSE 8443
 
-# Set up entrypoint to run code-server
-ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh; fi && pkill -f code-server || true && AVAILABLE_PORT='' && for port in 8443 8444 8445 8446 8447 8448; do if ! netstat -tuln | grep -q \":$port \"; then AVAILABLE_PORT=$port; echo \"Starting code-server on port $AVAILABLE_PORT\" && break; fi; done && if [ -z \"$AVAILABLE_PORT\" ]; then echo \"ERROR: No available ports found in range 8443-8448\" && exit 1; else exec /usr/bin/code-server --bind-addr 0.0.0.0:$AVAILABLE_PORT --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces; fi"]
+# Set up entrypoint to run code-server - using shell format instead of array format to avoid parsing issues
+ENTRYPOINT /bin/bash -c "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh; fi && pkill -f code-server || true && AVAILABLE_PORT='' && for port in 8443 8444 8445 8446 8447 8448; do if ! netstat -tuln | grep -q \":$port \"; then AVAILABLE_PORT=$port; echo \"Starting code-server on port $AVAILABLE_PORT\" && break; fi; done && if [ -z \"$AVAILABLE_PORT\" ]; then echo \"ERROR: No available ports found in range 8443-8448\" && exit 1; else exec /usr/bin/code-server --bind-addr 0.0.0.0:$AVAILABLE_PORT --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces; fi"
 EOF
     
     # Create a flag file to indicate setup is done
