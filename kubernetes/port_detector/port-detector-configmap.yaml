@@ -197,7 +197,7 @@ data:
             
             # Convert to number and check range
             PORT_NUM=$((PORT))
-            if [ $PORT_NUM -lt 1024 ] || [ $PORT_NUM -eq 8443 ]; then
+            if [ $PORT_NUM -lt 1024 ] || [ $PORT_NUM -eq 8443 ] || [ $PORT_NUM -eq 8444 ]; then
                 echo "Skipping system port: $PORT"
                 continue
             fi

@@ -369,8 +369,8 @@ def _create_service(workspace_ids):
             ports=[
                 client.V1ServicePort(
                     name="code-server-port",
-                    port=8443,
-                    target_port=8443
+                    port=8444,
+                    target_port=8444
                 )
             ]
         )
@@ -411,7 +411,7 @@ def _create_ingress(workspace_ids):
                                     service=client.V1IngressServiceBackend(
                                         name="code-server",
                                         port=client.V1ServiceBackendPort(
-                                            number=8443
+                                            number=8444
                                         )
                                     )
                                 )
@@ -1241,10 +1241,10 @@ FROM {AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-us
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
 # Expose default code-server port
-EXPOSE 8443
+EXPOSE 8444
 
 # Set up entrypoint to run code-server
-ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
+ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
 EOF
     
     # Create a flag file to indicate setup is done
@@ -1840,7 +1840,7 @@ def _create_code_server_container(workspace_ids, workspace_config):
         image=f"{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
         image_pull_policy=image_pull_policy,
         ports=[
-            client.V1ContainerPort(container_port=8443)
+            client.V1ContainerPort(container_port=8444)
         ],
         env=[
             # LinuxServer.io specific environment variables
