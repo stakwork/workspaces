@@ -73,7 +73,7 @@ kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-generated
 envsubst < ./kubernetes/cert-manager/certificates/workspace-cert-manager.yaml > ./kubernetes/cert-manager/certificates/workspace-cert-manager-generated.yaml
 kubectl apply -f ./kubernetes/cert-manager/certificates/workspace-cert-manager-generated.yaml
 
-envsubst < ./kubernetes/port_detector/port-detector-configmap.yaml > ./kubernetes/port_detector/port-detector-configmap-generated.yaml
+sed "s/\${SUBDOMAIN_REPLACE_ME}/$SUBDOMAIN_REPLACE_ME/g" ./kubernetes/port_detector/port-detector-configmap.yaml > ./kubernetes/port_detector/port-detector-configmap-generated.yaml
 kubectl apply -f ./kubernetes/port_detector/port-detector-configmap-generated.yaml
 envsubst < ./kubernetes/base/service-accounts/workspace-service-account.yaml > ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml
 kubectl apply -f ./kubernetes/base/service-accounts/workspace-service-account-generated.yaml

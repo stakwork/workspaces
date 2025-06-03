@@ -112,7 +112,7 @@ envsubst < ./kubernetes/base/config/workspace-domain-settings.yaml > ./kubernete
 kubectl apply -f ./kubernetes/base/config/workspace-domain-settings-generated.yaml
 envsubst < ./kubernetes/base/ingress/workspace-ingress-admin.yaml > ./kubernetes/base/ingress/workspace-ingress-admin-generated.yaml
 kubectl apply -f ./kubernetes/base/ingress/workspace-ingress-admin-generated.yaml
-envsubst < ./kubernetes/port_detector/port-detector-configmap.yaml > ./kubernetes/port_detector/port-detector-configmap-generated.yaml
+envsubst '$SUBDOMAIN_REPLACE_ME' < ./kubernetes/port_detector/port-detector-configmap.yaml > ./kubernetes/port_detector/port-detector-configmap-generated.yaml
 kubectl apply -f ./kubernetes/port_detector/port-detector-configmap-generated.yaml
 kubectl apply -f ./kubernetes/port_detector/port-detector-rbac.yaml
 # Step 9.1: Setup Registry TLS
