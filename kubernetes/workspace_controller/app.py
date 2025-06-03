@@ -361,6 +361,8 @@ def _create_post_start_command():
                 /workspaces/start-docker-compose.sh
             fi
 
+            cd /workspaces
+
             # Run post-create command if it exists
             if [ -f "/workspaces/post-create-command.sh" ]; then
                 echo "Running postCreateCommand..."
@@ -1450,11 +1452,15 @@ def _generate_init_script(workspace_ids, workspace_config):
 
     """
 
+    repo_names = []
+
     # Add repository clone commands
     for i, repo_url in enumerate(workspace_config['github_urls']):
         # Extract repo name from the URL
         repo_name_parts = repo_url.rstrip('/').split('/')
         folder_name = repo_name_parts[-1].replace('.git', '') if len(repo_name_parts) > 1 else f"repo-{i}"
+
+        repo_names.append(folder_name)
             
         # Add clone command for this repository
         init_script += f"""
@@ -1470,7 +1476,7 @@ def _generate_init_script(workspace_ids, workspace_config):
         init_script += _generate_custom_image_script(workspace_ids, workspace_config)
 
     # Add standard initialization code
-    init_script += _generate_standard_init_code()
+    init_script += _generate_standard_init_code(repo_names)
     
     return init_script
 
@@ -1513,9 +1519,15 @@ def _generate_custom_image_script(workspace_ids, workspace_config):
     """
 
 
-def _generate_standard_init_code():
+def _generate_standard_init_code(repo_names):
     """Generate standard initialization code common to all workspaces"""
-    return """
+    script = ""
+    for repo_name in repo_names:
+        script += f"""
+git config --global --add safe.directory /workspaces/{repo_name}
+"""
+
+    script += """
 # Set up git config if needed
 git config --global --add safe.directory /workspaces
 
@@ -1560,6 +1572,8 @@ EOF
       # Initialize workspace
       echo "Workspace initialized successfully!"
   """
+    
+    return script
 
 
 def _create_workspace_info_configmap(workspace_ids, workspace_config):
