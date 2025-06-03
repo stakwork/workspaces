@@ -176,6 +176,22 @@ def _create_post_start_command():
             }
             apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release git
 
+            # Wait for code-server to be ready before installing extensions
+            echo "Waiting for code-server to be ready..."
+            timeout=60
+            while ! pgrep -f "code-server" > /dev/null; do
+                echo "Waiting for code-server process to start..."
+                sleep 2
+                timeout=$((timeout - 1))
+                if [ $timeout -le 0 ]; then
+                    echo "Timeout waiting for code-server"
+                    break
+                fi
+            done
+
+            # Additional wait to ensure code-server is fully ready
+            sleep 10
+
             # Check and install any extensions from devcontainer.json if not already installed
             if [ -f /workspaces/install-extensions.sh ] && [ -f /workspaces/.extensions-list ]; then
                 echo "Running extension installation script again to ensure all extensions are installed"
@@ -208,7 +224,11 @@ def _create_post_start_command():
                 fi
                 
                 # Start Docker daemon
-                dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --storage-driver=overlay2 &
+                dockerd \
+                    --host=unix:///var/run/docker.sock \
+                    --host=tcp://127.0.0.1:2376 \
+                    --storage-driver=overlay2 \
+                    --tls=false &
                 DOCKER_PID=$!
                 echo "Docker daemon started with PID: $DOCKER_PID"
                 
@@ -278,6 +298,7 @@ def _create_post_start_command():
             # Setup Docker user and permissions
             echo "Setting up Docker group and permissions"
             groupadd -f docker
+            getent passwd root > /dev/null && usermod -aG docker root
             getent passwd abc > /dev/null && usermod -aG docker abc
             getent passwd coder > /dev/null && usermod -aG docker coder
             getent passwd vscode > /dev/null && usermod -aG docker vscode
@@ -333,6 +354,19 @@ def _create_post_start_command():
             else
                 echo "No feature installation script found"
             fi
+
+            # Run start-docker-compose command if it exists
+            if [ -f "/workspaces/start-docker-compose.sh" ]; then
+                echo "Running docker-compose..."
+                /workspaces/start-docker-compose.sh
+            fi
+
+            # Run post-create command if it exists
+            if [ -f "/workspaces/post-create-command.sh" ]; then
+                echo "Running postCreateCommand..."
+                /workspaces/post-create-command.sh
+            fi
+
             
             echo "Post-start initialization completed at $(date)"
         """
@@ -910,7 +944,7 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     """
     
     # Main processing script
-    init_script += """
+    init_script += f"""
     # Check again after potential re-cloning
     if [ -f "$DOCKERFILE_PATH" ]; then
         echo "Found user Dockerfile at $DOCKERFILE_PATH"
@@ -1026,91 +1060,217 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
                 echo "$POST_START_CMD" >> /workspaces/post-start-command.sh
                 chmod +x /workspaces/post-start-command.sh
             fi
-            
-            # Create a comprehensive extension installation script
-            echo "Creating extension installation script"
-            cat > /workspaces/install-extensions.sh << 'EOL'
+
+            DOCKER_COMPOSE_FILE=$(jq -r '.dockerComposeFile // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            SERVICE_NAME=$(jq -r '.service // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+            WORKSPACE_FOLDER=$(jq -r '.workspaceFolder // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+
+            if [ ! -z "$DOCKER_COMPOSE_FILE" ]; then
+                echo "Found dockerComposeFile in devcontainer.json: $DOCKER_COMPOSE_FILE"
+                echo "Service: $SERVICE_NAME"
+                echo "Workspace folder: $WORKSPACE_FOLDER"
+                
+                # Save docker-compose configuration
+                echo "{repo_name}/.devcontainer/$DOCKER_COMPOSE_FILE" > /workspaces/.docker-compose-file
+                [ ! -z "$SERVICE_NAME" ] && echo "$SERVICE_NAME" > /workspaces/.docker-compose-service
+                [ ! -z "$WORKSPACE_FOLDER" ] && echo "$WORKSPACE_FOLDER" > /workspaces/.docker-compose-workspace-folder
+                
+                echo "Docker Compose configuration will be started during workspace initialization"
+            fi
+
+            """
+
+    init_script += """
+
+# Create docker-compose startup script
+echo "Creating docker-compose startup script"
+cat > /workspaces/start-docker-compose.sh << 'EOL'
+#!/bin/bash
+set -e
+
+COMPOSE_FILE_PATH="/workspaces/.docker-compose-file"
+SERVICE_FILE_PATH="/workspaces/.docker-compose-service"
+WORKSPACE_FOLDER_FILE="/workspaces/.docker-compose-workspace-folder"
+
+if [ ! -f "$COMPOSE_FILE_PATH" ]; then
+    echo "No docker-compose configuration found"
+    exit 0
+fi
+
+DOCKER_COMPOSE_FILE=$(cat "$COMPOSE_FILE_PATH")
+SERVICE_NAME=""
+WORKSPACE_FOLDER="/workspaces"
+
+if [ -f "$SERVICE_FILE_PATH" ]; then
+    SERVICE_NAME=$(cat "$SERVICE_FILE_PATH")
+fi
+
+if [ -f "$WORKSPACE_FOLDER_FILE" ]; then
+    WORKSPACE_FOLDER=$(cat "$WORKSPACE_FOLDER_FILE")
+fi
+
+echo "Starting Docker Compose setup..."
+echo "Compose file: $DOCKER_COMPOSE_FILE"
+echo "Service: $SERVICE_NAME"
+echo "Workspace folder: $WORKSPACE_FOLDER"
+
+# Change to the directory containing the docker-compose file
+cd /workspaces
+
+# Find the docker-compose file (could be relative to .devcontainer or repo root)
+COMPOSE_FILE_FULL_PATH=""
+
+# Check in .devcontainer directory first
+if [ -f ".devcontainer/$DOCKER_COMPOSE_FILE" ]; then
+    COMPOSE_FILE_FULL_PATH=".devcontainer/$DOCKER_COMPOSE_FILE"
+    cd /workspaces
+elif [ -f "$DOCKER_COMPOSE_FILE" ]; then
+    COMPOSE_FILE_FULL_PATH="$DOCKER_COMPOSE_FILE"
+    cd /workspaces
+else
+    # Look for it in the first repository directory
+    for repo_dir in */; do
+        if [ -f "$repo_dir/.devcontainer/$DOCKER_COMPOSE_FILE" ]; then
+            COMPOSE_FILE_FULL_PATH="$repo_dir/.devcontainer/$DOCKER_COMPOSE_FILE"
+            cd "/workspaces/$repo_dir"
+            break
+        elif [ -f "$repo_dir/$DOCKER_COMPOSE_FILE" ]; then
+            COMPOSE_FILE_FULL_PATH="$repo_dir/$DOCKER_COMPOSE_FILE"
+            cd "/workspaces/$repo_dir"
+            break
+        fi
+    done
+fi
+
+if [ -z "$COMPOSE_FILE_FULL_PATH" ]; then
+    echo "ERROR: Could not find docker-compose file: $DOCKER_COMPOSE_FILE"
+    exit 1
+fi
+
+echo "Found docker-compose file at: $COMPOSE_FILE_FULL_PATH"
+echo "Working directory: $(pwd)"
+
+# Ensure Docker is running
+echo "Checking Docker daemon..."
+timeout=30
+while ! docker info >/dev/null 2>&1; do
+    if [ $timeout -le 0 ]; then
+        echo "ERROR: Docker daemon is not running"
+        exit 1
+    fi
+    echo "Waiting for Docker daemon to start..."
+    timeout=$((timeout - 1))
+    sleep 1
+done
+
+echo "Docker daemon is ready"
+
+# Start the docker-compose services
+echo "Starting Docker Compose services..."
+
+if [ ! -z "$SERVICE_NAME" ]; then
+    echo "Starting specific service: $SERVICE_NAME"
+    docker-compose -f "$COMPOSE_FILE_FULL_PATH" up -d "$SERVICE_NAME"
+    
+    # If this is a dev container setup, we might want to exec into the service
+    echo "Docker Compose service '$SERVICE_NAME' is running"
+    
+    # Optional: Get the container ID for the service
+    CONTAINER_ID=$(docker-compose -f "$COMPOSE_FILE_FULL_PATH" ps -q "$SERVICE_NAME")
+    if [ ! -z "$CONTAINER_ID" ]; then
+        echo "Service container ID: $CONTAINER_ID"
+        echo "$CONTAINER_ID" > /workspaces/.service-container-id
+        
+        # You could potentially exec into this container or forward ports
+        echo "Service is accessible via container: $CONTAINER_ID"
+    fi
+else
+    echo "Starting all services"
+    docker-compose -f "$COMPOSE_FILE_FULL_PATH" up -d
+fi
+
+# Show running containers
+echo "Docker Compose services status:"
+docker-compose -f "$COMPOSE_FILE_FULL_PATH" ps
+
+# Save the compose file path for later use
+echo "$COMPOSE_FILE_FULL_PATH" > /workspaces/.active-compose-file
+echo "$(pwd)" > /workspaces/.compose-working-directory
+
+echo "Docker Compose startup completed successfully"
+EOL
+chmod +x /workspaces/start-docker-compose.sh
+
+# Create a comprehensive extension installation script
+echo "Creating extension installation script"
+cat > /workspaces/install-extensions.sh << 'EOL'
 #!/bin/bash
 EXTENSIONS_FILE="/workspaces/.extensions-list"
 
 if [ -f "$EXTENSIONS_FILE" ]; then
   echo "Installing extensions from devcontainer.json..."
+
+  # Set the correct extension directory for the web UI
+  export VSCODE_EXTENSIONS="/config/extensions"
+  export CODE_SERVER_EXTENSIONS_DIR="/config/extensions"
+  
+  # Ensure directories exist with proper permissions
+  mkdir -p /config/extensions
+  mkdir -p /config/data/User
+  mkdir -p /config/data/logs
   
   # Create cache directory for extensions
   mkdir -p /workspaces/.vscode-extensions-cache
   
-  # Function to install extension with better error handling and caching
+  # Function to install extension properly
   install_extension() {
     local extension="$1"
-    local extension_id="${extension##*/}"  # Get last part after slash for GitHub URLs
-    local cache_file="/workspaces/.vscode-extensions-cache/${extension_id}.vsix"
-    
     echo "Installing extension: $extension"
     
-    # Check if it's a GitHub URL or extension ID
-    if [[ "$extension" == *"github.com"* ]] || [[ "$extension" == *"http://"* ]] || [[ "$extension" == *"https://"* ]]; then
-      # It's a URL, download it if not cached
-      if [ ! -f "$cache_file" ]; then
-        echo "Downloading extension from URL: $extension"
-        if curl -sL "$extension" -o "$cache_file"; then
-          echo "Download successful"
-        else
-          echo "Failed to download extension from URL"
-          return 1
-        fi
-      else
-        echo "Using cached extension file"
-      fi
+    # Install using the web-based code-server with explicit paths
+    if /usr/bin/code-server \
+        --extensions-dir /config/extensions \
+        --user-data-dir /config/data \
+        --install-extension "$extension" 2>&1 | tee -a /workspaces/extension-install.log; then
+      echo "Successfully installed: $extension"
+      return 0
+    else
+      echo "Failed to install: $extension, trying alternative method..."
       
-      # Install from downloaded file
-      if code-server --install-extension "$cache_file"; then
-        echo "Successfully installed extension from file: $extension_id"
+      # Alternative: try with different approach
+      if code-server \
+          --extensions-dir=/config/extensions \
+          --user-data-dir=/config/data \
+          --install-extension="$extension"; then
+        echo "Successfully installed with alternative method: $extension"
         return 0
       else
-        echo "Failed to install extension from file: $extension_id"
-        # Delete cache file to force re-download next time
-        rm -f "$cache_file"
+        echo "Failed to install with all methods: $extension"
         return 1
       fi
-    else
-      # Standard extension ID from marketplace
-      # Try up to 3 times with increasing delays
-      for i in 1 2 3; do
-        if code-server --install-extension "$extension"; then
-          echo "Successfully installed: $extension"
-          return 0
-        else
-          echo "Attempt $i failed to install: $extension"
-          if [ $i -lt 3 ]; then
-            sleep_time=$((i * 5))
-            echo "Retrying in $sleep_time seconds..."
-            sleep $sleep_time
-          else
-            echo "Failed to install extension after 3 attempts: $extension"
-            return 1
-          fi
-        fi
-      done
     fi
-    
-    return 1
   }
   
   # Install all extensions
   while IFS= read -r extension; do
     if [ ! -z "$extension" ]; then
-      # Trim any extra whitespace or quotes
       extension=$(echo "$extension" | tr -d '"' | tr -d "'" | xargs)
       install_extension "$extension"
+      sleep 3  # Longer delay between installations
     fi
   done < "$EXTENSIONS_FILE"
   
-  # Report installation results
+  # Force refresh of extension cache
+  rm -rf /config/data/CachedExtensions
+  rm -rf /config/data/logs/extension-host*
+  
+  # List extensions from the correct directory
   echo "=== Extension Installation Report ==="
-  echo "Installed extensions:"
-  code-server --list-extensions
+  echo "Extensions in /config/extensions:"
+  ls -la /config/extensions/ || echo "No extensions directory found"
+  echo "Extensions reported by code-server:"
+  /usr/bin/code-server --extensions-dir /config/extensions --user-data-dir /config/data --list-extensions || echo "Could not list extensions"
   echo "========================================="
-  echo "Finished installing extensions"
 else
   echo "No extensions list found"
 fi
@@ -1165,17 +1325,25 @@ EOL
             echo "Creating lifecycle script"
             cat > /workspaces/run-lifecycle.sh << 'EOL'
 #!/bin/bash
-# Run post-create command if it exists
-if [ -f "/workspaces/post-create-command.sh" ]; then
-  echo "Running postCreateCommand..."
-  /workspaces/post-create-command.sh
-fi
+cd /workspaces
+
+# # Run start-docker-compose command if it exists
+# if [ -f "/workspaces/start-docker-compose.sh" ]; then
+#   echo "Running docker-compose..."
+#   /workspaces/start-docker-compose.sh
+# fi
+
+# # Run post-create command if it exists
+# if [ -f "/workspaces/post-create-command.sh" ]; then
+#   echo "Running postCreateCommand..."
+#   /workspaces/post-create-command.sh
+# fi
 
 # Run post-start command if it exists
-if [ -f "/workspaces/post-start-command.sh" ]; then
-  echo "Running postStartCommand..."
-  /workspaces/post-start-command.sh
-fi
+# if [ -f "/workspaces/post-start-command.sh" ]; then
+#   echo "Running postStartCommand..."
+#   /workspaces/post-start-command.sh
+# fi
 
 # Set up VS Code settings if they exist
 if [ -f "/workspaces/.vscode/settings.json" ]; then
@@ -1348,24 +1516,23 @@ def _generate_custom_image_script(workspace_ids, workspace_config):
 def _generate_standard_init_code():
     """Generate standard initialization code common to all workspaces"""
     return """
+# Set up git config if needed
+git config --global --add safe.directory /workspaces
 
-      # Set up git config if needed
-      git config --global --add safe.directory /workspaces
+git config --global user.email "user@example.com"
+git config --global user.name "Code Server User"
 
-      git config --global user.email "user@example.com"
-      git config --global user.name "Code Server User"
+# Create Docker helper scripts for the user
+cat > /workspaces/docker-info.sh << 'EOF'
+#!/bin/bash
+echo "Docker is available as a separate daemon inside this container."
+echo "The Docker daemon starts automatically and is ready to use."
+echo "You can verify it's working by running: docker info"
+EOF
+chmod +x /workspaces/docker-info.sh
 
-      # Create Docker helper scripts for the user
-      cat > /workspaces/docker-info.sh << 'EOF'
-        #!/bin/bash
-        echo "Docker is available as a separate daemon inside this container."
-        echo "The Docker daemon starts automatically and is ready to use."
-        echo "You can verify it's working by running: docker info"
-      EOF
-      chmod +x /workspaces/docker-info.sh
-
-      # Create a custom .bashrc extension with Docker information
-      cat > /workspaces/.bash_docker << 'EOF'
+# Create a custom .bashrc extension with Docker information
+cat > /workspaces/.bash_docker << 'EOF'
 #!/bin/bash
 
 # Display Docker status on login
@@ -1848,6 +2015,10 @@ def _create_code_server_container(workspace_ids, workspace_config):
             client.V1EnvVar(name="PGID", value="1000"),  # Group ID
             client.V1EnvVar(name="TZ", value="UTC"),  # Timezone
             client.V1EnvVar(name="DEFAULT_WORKSPACE", value="/workspaces"),  
+            client.V1EnvVar(name="VSCODE_EXTENSIONS", value="/config/extensions"),
+            client.V1EnvVar(name="CODE_SERVER_EXTENSIONS_DIR", value="/config/extensions"),
+            client.V1EnvVar(name="VSCODE_USER_DATA_DIR", value="/config/data"),
+            client.V1EnvVar(name="CS_DISABLE_GETTING_STARTED_OVERRIDE", value="true"),
             client.V1EnvVar(name="VSCODE_PROXY_URI", value=f"https://{workspace_ids['subdomain']}-{{{{port}}}}.{WORKSPACE_DOMAIN}/"),
             # Authentication and core settings
             client.V1EnvVar(
