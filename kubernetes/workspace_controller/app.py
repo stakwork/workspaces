@@ -156,6 +156,14 @@ def _create_post_start_command():
             exec > /workspaces/poststart.log 2>&1
             echo "Starting post-start initialization at $(date)"
 
+            # Install netstat utility for port checking
+            apt-get update -y || {
+                echo "WARNING: apt-get update failed, retrying with a delay"
+                sleep 5
+                apt-get update -y || echo "WARNING: apt-get update failed again, proceeding anyway"
+            }
+            apt-get install -y net-tools
+
             # Detect OS distribution
             if [ -f /etc/os-release ]; then
                 . /etc/os-release
@@ -324,6 +332,29 @@ def _create_post_start_command():
                 ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
                 echo "Docker Compose installed:"
                 docker-compose --version || echo "Docker Compose installation failed"
+            fi
+            
+            # Handle any port conflicts for code-server
+            echo "Checking for port conflicts..."
+            if netstat -tuln | grep -q ':8443 '; then
+                echo "WARNING: Port 8443 is already in use!"
+                echo "Attempting to free up port 8443 for code-server..."
+                # Try to identify and stop the process using port 8443
+                PID=$(lsof -t -i:8443 2>/dev/null || netstat -tulpn 2>/dev/null | grep ':8443 ' | awk '{print $7}' | cut -d'/' -f1)
+                if [ ! -z "$PID" ]; then
+                    echo "Found process $PID using port 8443, attempting to terminate..."
+                    kill -15 $PID 2>/dev/null || kill -9 $PID 2>/dev/null || true
+                    sleep 2
+                    if netstat -tuln | grep -q ':8443 '; then
+                        echo "WARNING: Port 8443 still in use after termination attempt"
+                    else
+                        echo "Successfully freed port 8443"
+                    fi
+                else
+                    echo "Could not identify the process using port 8443"
+                fi
+            else
+                echo "Port 8443 is available for code-server"
             fi
             
             # Execute feature installation if the script exists
@@ -1014,16 +1045,162 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
             POST_CREATE_CMD=$(jq -r '.postCreateCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ ! -z "$POST_CREATE_CMD" ]; then
                 echo "Found postCreateCommand in devcontainer.json"
-                echo "#!/bin/bash" > /workspaces/post-create-command.sh
-                echo "$POST_CREATE_CMD" >> /workspaces/post-create-command.sh
+                cat > /workspaces/post-create-command.sh << 'EOL'
+#!/bin/bash
+set -e
+
+# Go to the main repository directory
+PRIMARY_REPO=$(ls -d /workspaces/*/ 2>/dev/null | head -1 | sed 's/\/$//')
+if [ -d "$PRIMARY_REPO" ]; then
+  cd "$PRIMARY_REPO"
+  echo "Running in context of repository: $(basename $PRIMARY_REPO)"
+else
+  cd /workspaces
+  echo "No repository directory found, running in /workspaces"
+fi
+
+# Helper function to find and run scripts with better path handling
+run_script() {
+  local script="$1"
+  local repo_name=$(basename "$PRIMARY_REPO")
+  
+  # Remove any quotes
+  script=$(echo "$script" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+  
+  echo "Running command: $script"
+  
+  # If it's a script file, try to locate it with proper path resolution
+  if [[ "$script" == *".sh" || "$script" == *".bash" ]]; then
+    # First, check if the script path contains the repo name and adjust if needed
+    if [[ "$script" == "$repo_name"/* ]]; then
+      # Convert repo-relative path to absolute path
+      resolved_script="/workspaces/$script"
+      echo "Resolving repository-relative path: $script -> $resolved_script"
+      script=$resolved_script
+    fi
+
+    # Try different locations to find the script
+    if [ -f "$script" ]; then
+      echo "Found script at: $script"
+      bash "$script"
+    elif [ -f "/workspaces/$script" ]; then
+      echo "Found script at: /workspaces/$script"
+      bash "/workspaces/$script"
+    elif [ -f ".devcontainer/$script" ]; then
+      echo "Found script at: .devcontainer/$script"
+      bash ".devcontainer/$script"
+    elif [ -f ".devcontainer/$(basename $script)" ]; then
+      echo "Found script at: .devcontainer/$(basename $script)"
+      bash ".devcontainer/$(basename $script)"
+    elif [ -f "$PRIMARY_REPO/.devcontainer/$script" ]; then
+      echo "Found script at: $PRIMARY_REPO/.devcontainer/$script"
+      bash "$PRIMARY_REPO/.devcontainer/$script"
+    elif [ -f "$PRIMARY_REPO/.devcontainer/$(basename $script)" ]; then
+      echo "Found script at: $PRIMARY_REPO/.devcontainer/$(basename $script)"
+      bash "$PRIMARY_REPO/.devcontainer/$(basename $script)"
+    else
+      echo "Could not find script at any expected location, running as command"
+      eval "$script"
+    fi
+  else
+    # Run as a regular command
+    eval "$script"
+  fi
+}
+EOL
+
+                # Add the actual command(s)
+                if [[ "$POST_CREATE_CMD" == "["* ]]; then
+                    # It's a JSON array
+                    jq -r '.postCreateCommand[]?' "$DEVCONTAINER_JSON_PATH" | while read -r cmd; do
+                        echo "run_script '$cmd'" >> /workspaces/post-create-command.sh
+                    done
+                else
+                    # It's a simple string
+                    echo "run_script '$POST_CREATE_CMD'" >> /workspaces/post-create-command.sh
+                fi
+                
                 chmod +x /workspaces/post-create-command.sh
             fi
             
             POST_START_CMD=$(jq -r '.postStartCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ ! -z "$POST_START_CMD" ]; then
                 echo "Found postStartCommand in devcontainer.json"
-                echo "#!/bin/bash" > /workspaces/post-start-command.sh
-                echo "$POST_START_CMD" >> /workspaces/post-start-command.sh
+                cat > /workspaces/post-start-command.sh << 'EOL'
+#!/bin/bash
+set -e
+
+# Go to the main repository directory
+PRIMARY_REPO=$(ls -d /workspaces/*/ 2>/dev/null | head -1 | sed 's/\/$//')
+if [ -d "$PRIMARY_REPO" ]; then
+  cd "$PRIMARY_REPO"
+  echo "Running in context of repository: $(basename $PRIMARY_REPO)"
+else
+  cd /workspaces
+  echo "No repository directory found, running in /workspaces"
+fi
+
+# Helper function to find and run scripts with better path handling
+run_script() {
+  local script="$1"
+  local repo_name=$(basename "$PRIMARY_REPO")
+  
+  # Remove any quotes
+  script=$(echo "$script" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+  
+  echo "Running command: $script"
+  
+  # If it's a script file, try to locate it with proper path resolution
+  if [[ "$script" == *".sh" || "$script" == *".bash" ]]; then
+    # First, check if the script path contains the repo name and adjust if needed
+    if [[ "$script" == "$repo_name"/* ]]; then
+      # Convert repo-relative path to absolute path
+      resolved_script="/workspaces/$script"
+      echo "Resolving repository-relative path: $script -> $resolved_script"
+      script=$resolved_script
+    fi
+
+    # Try different locations to find the script
+    if [ -f "$script" ]; then
+      echo "Found script at: $script"
+      bash "$script"
+    elif [ -f "/workspaces/$script" ]; then
+      echo "Found script at: /workspaces/$script"
+      bash "/workspaces/$script"
+    elif [ -f ".devcontainer/$script" ]; then
+      echo "Found script at: .devcontainer/$script"
+      bash ".devcontainer/$script"
+    elif [ -f ".devcontainer/$(basename $script)" ]; then
+      echo "Found script at: .devcontainer/$(basename $script)"
+      bash ".devcontainer/$(basename $script)"
+    elif [ -f "$PRIMARY_REPO/.devcontainer/$script" ]; then
+      echo "Found script at: $PRIMARY_REPO/.devcontainer/$script"
+      bash "$PRIMARY_REPO/.devcontainer/$script"
+    elif [ -f "$PRIMARY_REPO/.devcontainer/$(basename $script)" ]; then
+      echo "Found script at: $PRIMARY_REPO/.devcontainer/$(basename $script)"
+      bash "$PRIMARY_REPO/.devcontainer/$(basename $script)"
+    else
+      echo "Could not find script at any expected location, running as command"
+      eval "$script"
+    fi
+  else
+    # Run as a regular command
+    eval "$script"
+  fi
+}
+EOL
+
+                # Add the actual command(s)
+                if [[ "$POST_START_CMD" == "["* ]]; then
+                    # It's a JSON array
+                    jq -r '.postStartCommand[]?' "$DEVCONTAINER_JSON_PATH" | while read -r cmd; do
+                        echo "run_script '$cmd'" >> /workspaces/post-start-command.sh
+                    done
+                else
+                    # It's a simple string
+                    echo "run_script '$POST_START_CMD'" >> /workspaces/post-start-command.sh
+                fi
+                
                 chmod +x /workspaces/post-start-command.sh
             fi
             
@@ -1165,17 +1342,30 @@ EOL
             echo "Creating lifecycle script"
             cat > /workspaces/run-lifecycle.sh << 'EOL'
 #!/bin/bash
+set -e
+
+echo "Running lifecycle commands"
+
+# Function to run a script with nice error handling
+run_with_error_handling() {
+  local script_name="$1"
+  echo "Running $script_name..."
+  if [ -f "$script_name" ]; then
+    if bash "$script_name"; then
+      echo "$script_name completed successfully"
+    else
+      echo "WARNING: $script_name failed with exit code $?"
+    fi
+  else
+    echo "Script $script_name not found"
+  fi
+}
+
 # Run post-create command if it exists
-if [ -f "/workspaces/post-create-command.sh" ]; then
-  echo "Running postCreateCommand..."
-  /workspaces/post-create-command.sh
-fi
+run_with_error_handling "/workspaces/post-create-command.sh"
 
 # Run post-start command if it exists
-if [ -f "/workspaces/post-start-command.sh" ]; then
-  echo "Running postStartCommand..."
-  /workspaces/post-start-command.sh
-fi
+run_with_error_handling "/workspaces/post-start-command.sh"
 
 # Set up VS Code settings if they exist
 if [ -f "/workspaces/.vscode/settings.json" ]; then
@@ -1191,6 +1381,8 @@ if [ -f "/workspaces/.forward-ports" ]; then
   # This is just for informational purposes
   cat /workspaces/.forward-ports
 fi
+
+echo "Lifecycle commands completed"
 EOL
             chmod +x /workspaces/run-lifecycle.sh
     """
@@ -1243,8 +1435,8 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 # Expose default code-server port
 EXPOSE 8443
 
-# Set up entrypoint to run code-server
-ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
+# Set up entrypoint to run code-server - using shell format instead of array format to avoid parsing issues
+ENTRYPOINT /bin/bash -c "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh; fi && echo 'Stopping any existing code-server processes...' && pkill -f code-server || true && echo 'Waiting for port 8443 to be available...' && while netstat -tuln | grep -q ':8443 '; do echo 'Port 8443 still in use, waiting 1 second...' && sleep 1; done && echo 'Starting code-server on port 8443' && exec /usr/bin/code-server --bind-addr 0.0.0.0:8443 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"
 EOF
     
     # Create a flag file to indicate setup is done
