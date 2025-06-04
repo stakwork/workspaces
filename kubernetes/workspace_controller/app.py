@@ -2020,9 +2020,9 @@ def _create_code_server_container(workspace_ids, workspace_config):
         name="code-server",
         image=f"{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
         image_pull_policy=image_pull_policy,
-        ports=[
-            client.V1ContainerPort(container_port=8444)
-        ],
+        # ports=[
+        #     client.V1ContainerPort(container_port=8444)
+        # ],
         env=[
             # LinuxServer.io specific environment variables
             client.V1EnvVar(name="PUID", value="1000"),  # User ID
@@ -2066,12 +2066,12 @@ def _create_code_server_container(workspace_ids, workspace_config):
         ),
         resources=client.V1ResourceRequirements(
             requests={
-                "cpu": "2",
-                "memory": "4Gi"
+                "cpu": "4",
+                "memory": "8Gi"
             },
             limits={
-                "cpu": "3",
-                "memory": "6Gi"
+                "cpu": "4",
+                "memory": "8Gi"
             }
         )
     )
