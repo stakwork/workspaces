@@ -117,7 +117,7 @@ def create_workspace():
         
         # Create storage and credentials
         _create_persistent_volume_claim(workspace_ids)
-        _create_workspace_secret(workspace_ids)
+        _create_workspace_secret(workspace_ids, workspace_config.get('github_token'))
         
         # Create initialization scripts
         _create_init_script_configmap(workspace_ids, workspace_config)
@@ -480,7 +480,10 @@ def _extract_workspace_config(data):
     custom_image_url = data.get('imageUrl', '')
     use_custom_image_url = bool(custom_image_url)
     use_dev_container = data.get('useDevContainer', True)
-    
+
+    # Get optional GitHub token
+    github_token = data.get('githubToken', None)
+        
     if use_custom_image_url:
         logger.info(f"Custom image URL provided: {custom_image_url}")
     else:
@@ -495,7 +498,8 @@ def _extract_workspace_config(data):
         'custom_image': custom_image,
         'custom_image_url': custom_image_url,
         'use_custom_image_url': use_custom_image_url,
-        'use_dev_container': use_dev_container
+        'use_dev_container': use_dev_container,
+        'github_token': github_token
     }
 
 
@@ -554,17 +558,22 @@ def _create_persistent_volume_claim(workspace_ids):
     logger.info(f"Created PVC in namespace: {workspace_ids['namespace_name']}")
 
 
-def _create_workspace_secret(workspace_ids):
-    """Create secret for workspace credentials"""
+def _create_workspace_secret(workspace_ids, github_token=None):
+    """Create secret for workspace credentials and optional GitHub token"""
+    string_data = {
+        "password": workspace_ids['password']
+    }
+
+    if github_token:
+        string_data["github_token"] = github_token
+
     secret = client.V1Secret(
         metadata=client.V1ObjectMeta(
             name="workspace-secret",
             namespace=workspace_ids['namespace_name'],
             labels={"app": "workspace"}
         ),
-        string_data={
-            "password": workspace_ids['password']
-        }
+        string_data=string_data
     )
     core_v1.create_namespaced_secret(workspace_ids['namespace_name'], secret)
     logger.info(f"Created secret in namespace: {workspace_ids['namespace_name']}")
@@ -1450,6 +1459,11 @@ def _generate_init_script(workspace_ids, workspace_config):
       # Change to the workspace directory
       cd /workspaces
 
+      # Configure git to use GITHUB_TOKEN for private repos
+      if [ ! -z "$GITHUB_TOKEN" ]; then
+        echo "Using GITHUB_TOKEN for private repo access"
+        git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
+      fi
     """
 
     repo_names = []
@@ -1840,6 +1854,20 @@ def _create_init_containers(workspace_ids, workspace_config):
 
 def _create_workspace_init_container():
     """Create the main workspace initialization container"""
+    env_vars = []
+    # Add GITHUB_TOKEN env var if present in secret
+    env_vars.append(
+        client.V1EnvVar(
+            name="GITHUB_TOKEN",
+            value_from=client.V1EnvVarSource(
+                secret_key_ref=client.V1SecretKeySelector(
+                    name="workspace-secret",
+                    key="github_token",
+                    optional=True
+                )
+            )
+        )
+    )
     return client.V1Container(
         name="init-workspace",
         image="buildpack-deps:22.04-scm",
@@ -1868,7 +1896,8 @@ def _create_workspace_init_container():
                 name="docker-sock",
                 mount_path="/var/run/docker.sock"
             )
-        ]
+        ],
+        env=env_vars
     )
 
 def _create_pvc_for_registry(workspace_ids):
