@@ -5,3 +5,5 @@ kubernetes==26.1.0
 PyYAML==6.0
 randomname==0.1.5
 werkzeug==2.2.2
+PyJWT
+bcrypt

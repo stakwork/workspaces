@@ -14,8 +14,45 @@ data:
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     </head>
     <body class="bg-gray-100 font-sans">
-        <div class="container mx-auto p-4">
-            <h1 class="text-3xl font-bold mb-6">Workspace Manager</h1>
+        <!-- Login Modal -->
+        <div id="loginModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <div class="mt-3">
+                    <h3 class="text-lg font-bold text-gray-900 mb-4">Login to Workspace Manager</h3>
+                    <form id="loginForm">
+                        <div class="mb-4">
+                            <label for="username" class="block text-gray-700 text-sm font-bold mb-2">Username:</label>
+                            <input type="text" id="username" name="username" required
+                                class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline">
+                        </div>
+                        <div class="mb-6">
+                            <label for="password" class="block text-gray-700 text-sm font-bold mb-2">Password:</label>
+                            <input type="password" id="password" name="password" required
+                                class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline">
+                        </div>
+                        <div id="loginError" class="mb-4 text-red-500 text-sm hidden"></div>
+                        <div class="flex items-center justify-between">
+                            <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
+                                Sign In
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div id="mainContent" class="container mx-auto p-4 hidden">
+            <!-- Header with Logout -->
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-3xl font-bold">Workspace Manager</h1>
+                <div class="flex items-center space-x-4">
+                    <span id="userInfo" class="text-gray-600"></span>
+                    <button id="logoutBtn" class="bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600">
+                        Logout
+                    </button>
+                </div>
+            </div>
             
             <!-- Create Workspace Form -->
             <div class="bg-white p-6 rounded-lg shadow-md mb-8">
@@ -119,12 +156,169 @@ data:
         <script>
             const API_BASE_URL = '/api';
             let repoCounter = 1;
+            let authToken = null;
+            let currentUser = null;
             
-            // Load workspaces on page load
+            // Authentication utilities
+            class Auth {
+                static getToken() {
+                    return localStorage.getItem('workspace_auth_token');
+                }
+                
+                static setToken(token) {
+                    localStorage.setItem('workspace_auth_token', token);
+                    authToken = token;
+                }
+                
+                static removeToken() {
+                    localStorage.removeItem('workspace_auth_token');
+                    localStorage.removeItem('workspace_user_info');
+                    authToken = null;
+                    currentUser = null;
+                }
+                
+                static getUserInfo() {
+                    const userInfo = localStorage.getItem('workspace_user_info');
+                    return userInfo ? JSON.parse(userInfo) : null;
+                }
+                
+                static setUserInfo(userInfo) {
+                    localStorage.setItem('workspace_user_info', JSON.stringify(userInfo));
+                    currentUser = userInfo;
+                }
+                
+                static isAuthenticated() {
+                    const token = this.getToken();
+                    if (!token) return false;
+                    
+                    try {
+                        // Simple JWT expiration check
+                        const payload = JSON.parse(atob(token.split('.')[1]));
+                        return payload.exp * 1000 > Date.now();
+                    } catch (e) {
+                        return false;
+                    }
+                }
+                
+                static getAuthHeaders() {
+                    const token = this.getToken();
+                    return token ? { 'Authorization': `Bearer ${token}` } : {};
+                }
+            }
+            
+            // Initialize on page load
             document.addEventListener('DOMContentLoaded', function() {
-                loadWorkspaces();
-                setupFormListeners();
+                initializeApp();
             });
+            
+            function initializeApp() {
+                authToken = Auth.getToken();
+                currentUser = Auth.getUserInfo();
+                
+                if (Auth.isAuthenticated()) {
+                    showMainContent();
+                    loadWorkspaces();
+                    setupFormListeners();
+                } else {
+                    showLoginModal();
+                }
+                
+                setupAuthListeners();
+            }
+            
+            function setupAuthListeners() {
+                // Login form
+                document.getElementById('loginForm').addEventListener('submit', handleLogin);
+                
+                // Logout button
+                document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+            }
+            
+            function showLoginModal() {
+                document.getElementById('loginModal').classList.remove('hidden');
+                document.getElementById('mainContent').classList.add('hidden');
+            }
+            
+            function showMainContent() {
+                document.getElementById('loginModal').classList.add('hidden');
+                document.getElementById('mainContent').classList.remove('hidden');
+                
+                if (currentUser) {
+                    document.getElementById('userInfo').textContent = `Welcome, ${currentUser.username}`;
+                }
+            }
+            
+            async function handleLogin(e) {
+                e.preventDefault();
+                
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                const loginError = document.getElementById('loginError');
+                
+                try {
+                    const response = await fetch(`${API_BASE_URL}/auth/login`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ username, password })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok && data.success) {
+                        Auth.setToken(data.token);
+                        Auth.setUserInfo(data.user);
+                        currentUser = data.user;
+                        
+                        showMainContent();
+                        loadWorkspaces();
+                        setupFormListeners();
+                        
+                        // Clear form
+                        document.getElementById('loginForm').reset();
+                        loginError.classList.add('hidden');
+                    } else {
+                        loginError.textContent = data.error || 'Login failed';
+                        loginError.classList.remove('hidden');
+                    }
+                } catch (error) {
+                    console.error('Login error:', error);
+                    loginError.textContent = 'Login failed. Please try again.';
+                    loginError.classList.remove('hidden');
+                }
+            }
+            
+            function handleLogout() {
+                if (confirm('Are you sure you want to logout?')) {
+                    Auth.removeToken();
+                    showLoginModal();
+                }
+            }
+            
+            // Modified fetch function to include auth headers
+            async function authenticatedFetch(url, options = {}) {
+                const authHeaders = Auth.getAuthHeaders();
+                
+                const config = {
+                    ...options,
+                    headers: {
+                        ...authHeaders,
+                        ...options.headers
+                    }
+                };
+                
+                const response = await fetch(url, config);
+                
+                // Handle 401 Unauthorized
+                if (response.status === 401) {
+                    Auth.removeToken();
+                    showLoginModal();
+                    throw new Error('Authentication required');
+                }
+                
+                return response;
+            }
             
             // Setup form listeners
             function setupFormListeners() {
@@ -200,10 +394,10 @@ data:
                 }
             }
             
-            // Function to load workspaces
+            // Function to load workspaces (updated with auth)
             async function loadWorkspaces() {
                 try {
-                    const response = await fetch(`${API_BASE_URL}/workspaces`);
+                    const response = await authenticatedFetch(`${API_BASE_URL}/workspaces`);
                     const data = await response.json();
                     
                     const workspacesList = document.getElementById('workspacesList');
@@ -298,17 +492,16 @@ data:
                     }
                 } catch (error) {
                     console.error('Error loading workspaces:', error);
-                    document.getElementById('workspacesList').innerHTML = 
-                        '<p class="text-red-500">Failed to load workspaces. Please try again later.</p>';
+                    if (error.message !== 'Authentication required') {
+                        document.getElementById('workspacesList').innerHTML = 
+                            '<p class="text-red-500">Failed to load workspaces. Please try again later.</p>';
+                    }
                 }
             }
             
-            // Function to create a workspace
+            // Function to create a workspace (updated with auth)
             async function createWorkspace() {
-                // Get all repository inputs
                 const repoInputs = document.querySelectorAll('#repoInputs input[type="text"]');
-
-                console.log("repoInputs", repoInputs)
 
                 const githubUrls = Array.from(repoInputs)
                     .map(input => input.value.trim())
@@ -319,14 +512,12 @@ data:
                     return;
                 }
 
-                // Get optional GitHub PAT
                 const githubPat = document.getElementById('githubPat').value.trim();
                 
                 let requestData = {
                     githubUrls: githubUrls
                 };
 
-                // Add PAT if provided
                 if (githubPat) {
                     requestData.githubToken = githubPat;
                 }
@@ -356,7 +547,7 @@ data:
                 statusEl.classList.remove('hidden');
                 
                 try {
-                    const response = await fetch(`${API_BASE_URL}/workspaces`, {
+                    const response = await authenticatedFetch(`${API_BASE_URL}/workspaces`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
@@ -382,13 +573,8 @@ data:
                                 `;
                                 
                                 workspace.repositories.forEach(repo => {
-                                    // Remove trailing slashes and get the last segment
                                     const lastSegment = repo.replace(/\/+$/, '').split('/').pop() || '';
-                                    
-                                    // Remove .git extension and any leading slash
                                     const repoShortName = lastSegment.replace('.git', '').replace(/^\/+/, '');
-                                    
-                                    // Fallback if the name is empty after processing
                                     const displayName = repoShortName || 'repository';
                                     
                                     repoListHtml += `<li>${displayName}</li>`;
@@ -449,17 +635,19 @@ data:
                     }
                 } catch (error) {
                     console.error('Error creating workspace:', error);
-                    statusEl.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
-                    statusEl.innerHTML = '<p>Failed to create workspace. Please try again later.</p>';
+                    if (error.message !== 'Authentication required') {
+                        statusEl.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
+                        statusEl.innerHTML = '<p>Failed to create workspace. Please try again later.</p>';
+                    }
                 }
             }
             
-            // Function to start a workspace
+            // Function to start a workspace (updated with auth)
             async function startWorkspace(id) {
                 if (!confirm('Start this workspace?')) return;
                 
                 try {
-                    const response = await fetch(`${API_BASE_URL}/workspaces/${id}/start`, {
+                    const response = await authenticatedFetch(`${API_BASE_URL}/workspaces/${id}/start`, {
                         method: 'POST'
                     });
                     
@@ -473,16 +661,18 @@ data:
                     }
                 } catch (error) {
                     console.error('Error starting workspace:', error);
-                    alert('Failed to start workspace. Please try again later.');
+                    if (error.message !== 'Authentication required') {
+                        alert('Failed to start workspace. Please try again later.');
+                    }
                 }
             }
             
-            // Function to stop a workspace
+            // Function to stop a workspace (updated with auth)
             async function stopWorkspace(id) {
                 if (!confirm('Stop this workspace?')) return;
                 
                 try {
-                    const response = await fetch(`${API_BASE_URL}/workspaces/${id}/stop`, {
+                    const response = await authenticatedFetch(`${API_BASE_URL}/workspaces/${id}/stop`, {
                         method: 'POST'
                     });
                     
@@ -496,18 +686,20 @@ data:
                     }
                 } catch (error) {
                     console.error('Error stopping workspace:', error);
-                    alert('Failed to stop workspace. Please try again later.');
+                    if (error.message !== 'Authentication required') {
+                        alert('Failed to stop workspace. Please try again later.');
+                    }
                 }
             }
             
-            // Function to delete a workspace
+            // Function to delete a workspace (updated with auth)
             async function deleteWorkspace(id) {
                 if (!confirm('Are you sure you want to delete this workspace? This action cannot be undone.')) {
                     return;
                 }
                 
                 try {
-                    const response = await fetch(`${API_BASE_URL}/workspaces/${id}/delete`, {
+                    const response = await authenticatedFetch(`${API_BASE_URL}/workspaces/${id}/delete`, {
                         method: 'DELETE'
                     });
                     
@@ -521,7 +713,9 @@ data:
                     }
                 } catch (error) {
                     console.error('Error deleting workspace:', error);
-                    alert('Failed to delete workspace. Please try again later.');
+                    if (error.message !== 'Authentication required') {
+                        alert('Failed to delete workspace. Please try again later.');
+                    }
                 }
             }
             

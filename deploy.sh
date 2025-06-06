@@ -106,6 +106,13 @@ kubectl wait --for=condition=complete job/create-registry-certs -n workspace-sys
 
 
 kubectl apply -f ./kubernetes/base/apps/workspace-registry.yaml
+
+envsubst '${JWT_SECRET}' < ./kubernetes/base/apps/workspace-ui-secret.yaml > ./kubernetes/base/apps/workspace-ui-secret-generated.yaml
+kubectl apply -f ./kubernetes/base/apps/workspace-ui-secret-generated.yaml
+
+envsubst '${ADMIN_PASSWORD}' < ./kubernetes/base/apps/workspace-ui-configmap.yaml > ./kubernetes/base/apps/workspace-ui-configmap-generated.yaml
+kubectl apply -f ./kubernetes/base/apps/workspace-ui-configmap-generated.yaml
+
 kubectl apply -f ./kubernetes/base/apps/workspace-ui.yaml
 
 # Step 10: Apply Port Detector RBAC
