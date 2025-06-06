@@ -530,11 +530,20 @@ def _create_ingress(workspace_ids):
 def _extract_workspace_config(data):
     """Extract and validate workspace configuration from request data"""
     github_urls = data.get('githubUrls', [])
+    github_branches = data.get('githubBranches', [])
+
     if data.get('githubUrl') and not github_urls:
         github_urls = [data.get('githubUrl')]
+        # Handle single branch for backward compatibility
+        if data.get('githubBranch'):
+            github_branches = [data.get('githubBranch')]
     
     if not github_urls:
         raise ValueError("At least one GitHub URL is required")
+    
+    # Ensure branches array matches URLs array length
+    while len(github_branches) < len(github_urls):
+        github_branches.append("")  # Empty string for default branch
 
     # Extract primary repo details
     primary_repo_url = github_urls[0].rstrip('/')
@@ -559,6 +568,7 @@ def _extract_workspace_config(data):
     
     return {
         'github_urls': github_urls,
+        'github_branches': github_branches,
         'primary_repo_url': primary_repo_url,
         'repo_name': repo_name,
         'custom_image': custom_image,
@@ -1016,7 +1026,19 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
     if [ ! -d "$USER_REPO_PATH" ]; then
         echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
         cd /workspaces
-        git clone {workspace_config['github_urls'][0]} {repo_name}
+        
+        # Get the branch for the first repository
+        BRANCH="{workspace_config['github_branches'][0] if workspace_config['github_branches'] and workspace_config['github_branches'][0] else ''}"
+        
+        if [ ! -z "$BRANCH" ]; then
+            echo "Cloning with specific branch: $BRANCH"
+            git clone -b $BRANCH {workspace_config['github_urls'][0]} {repo_name}
+        else
+            echo "Cloning with default branch"
+            git clone {workspace_config['github_urls'][0]} {repo_name}
+        fi
+
+        git config --global --add safe.directory /workspaces/{repo_name}
     fi
     """
     
@@ -1541,15 +1563,25 @@ def _generate_init_script(workspace_ids, workspace_config):
         folder_name = repo_name_parts[-1].replace('.git', '') if len(repo_name_parts) > 1 else f"repo-{i}"
 
         repo_names.append(folder_name)
+
+        branch = workspace_config['github_branches'][i] if i < len(workspace_config['github_branches']) else ""
             
-        # Add clone command for this repository
-        init_script += f"""
-        # Clone repository {i+1}: {repo_url}
+        if branch:
+            init_script += f"""
+        # Clone repository {i+1}: {repo_url} (branch: {branch})
+        if [ ! -d "/workspaces/{folder_name}" ]; then
+            echo "Cloning {repo_url} branch {branch} into {folder_name}..."
+            git clone -b {branch} {repo_url} {folder_name}
+        fi
+        """
+        else:
+            init_script += f"""
+        # Clone repository {i+1}: {repo_url} (default branch)
         if [ ! -d "/workspaces/{folder_name}" ]; then
             echo "Cloning {repo_url} into {folder_name}..."
             git clone {repo_url} {folder_name}
         fi
-    """
+        """
 
     # Add custom image building section if required
     if workspace_config['use_custom_image_url']:
@@ -1679,6 +1711,7 @@ def _get_workspace_info(workspace_ids, workspace_config):
     workspace_info = {
         "id": workspace_ids['workspace_id'],
         "repositories": workspace_config['github_urls'],
+        "branches": workspace_config['github_branches'],
         "primaryRepo": workspace_config['primary_repo_url'],
         "repoName": workspace_config['repo_name'],
         "subdomain": workspace_ids['subdomain'],
@@ -1996,7 +2029,14 @@ def _create_base_image_kaniko_container(workspace_ids):
             "--context=/workspace",
             f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",
-            "--skip-tls-verify"
+            "--skip-tls-verify",
+            "--verbosity=debug",
+            "--push-retry=3"
+        ],
+        env=[
+            client.V1EnvVar(name="DOCKER_CONFIG", value="/kaniko/.docker/"),
+            client.V1EnvVar(name="HTTP_TIMEOUT", value="600s"),  # Increase timeout
+            client.V1EnvVar(name="HTTPS_TIMEOUT", value="600s")
         ],
         volume_mounts=[
             client.V1VolumeMount(
@@ -2021,7 +2061,14 @@ def _create_wrapper_kaniko_container(workspace_ids):
             "--context=/workspace",
             f"--destination={AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",
-            "--skip-tls-verify"
+            "--skip-tls-verify",
+            "--verbosity=debug",
+            "--push-retry=3"
+        ],
+        env=[
+            client.V1EnvVar(name="DOCKER_CONFIG", value="/kaniko/.docker/"),
+            client.V1EnvVar(name="HTTP_TIMEOUT", value="600s"),  # Increase timeout
+            client.V1EnvVar(name="HTTPS_TIMEOUT", value="600s")
         ],
         volume_mounts=[
             client.V1VolumeMount(

@@ -62,12 +62,17 @@ data:
                     <div class="mb-6">
                         <h3 class="text-lg font-medium mb-3">Repositories</h3>
                         <div id="repoInputs" class="space-y-3 mb-4">
-                            <div class="repo-input flex items-start">
+                            <div class="repo-input">
                                 <div class="w-full">
                                     <label for="githubUrl0" class="block text-gray-700 mb-2">GitHub Repository URL</label>
                                     <input type="text" id="githubUrl0" 
                                         placeholder="https://github.com/username/repository" 
+                                        class="w-full p-2 border border-gray-300 rounded-md mb-2">
+                                    <label for="githubBranch0" class="block text-gray-700 mb-2">Branch (optional)</label>
+                                    <input type="text" id="githubBranch0" 
+                                        placeholder="main (leave empty for default branch)" 
                                         class="w-full p-2 border border-gray-300 rounded-md">
+                                    <p class="text-xs text-gray-500 mt-1">If not specified, the repository's default branch will be used</p>
                                 </div>
                             </div>
                         </div>
@@ -348,17 +353,24 @@ data:
             function addRepositoryInput() {
                 const repoInputs = document.getElementById('repoInputs');
                 const newInput = document.createElement('div');
-                newInput.className = 'repo-input flex items-start';
+                newInput.className = 'repo-input';
                 newInput.innerHTML = `
-                    <div class="w-full mr-2">
-                        <label for="githubUrl${repoCounter}" class="block text-gray-700 mb-2">Additional Repository URL</label>
+                    <div class="w-full border border-gray-200 rounded-md p-3 mb-3">
+                        <div class="flex justify-between items-start mb-2">
+                            <label for="githubUrl${repoCounter}" class="block text-gray-700 font-medium">Additional Repository URL</label>
+                            <button type="button" class="remove-repo-btn bg-red-500 text-white py-1 px-3 rounded-md text-sm hover:bg-red-600">
+                                Remove
+                            </button>
+                        </div>
                         <input type="text" id="githubUrl${repoCounter}" 
                             placeholder="https://github.com/username/repository" 
+                            class="w-full p-2 border border-gray-300 rounded-md mb-2">
+                        <label for="githubBranch${repoCounter}" class="block text-gray-700 mb-2">Branch (optional)</label>
+                        <input type="text" id="githubBranch${repoCounter}" 
+                            placeholder="main (leave empty for default branch)" 
                             class="w-full p-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">If not specified, the repository's default branch will be used</p>
                     </div>
-                    <button type="button" class="remove-repo-btn bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 mt-8">
-                        Remove
-                    </button>
                 `;
                 repoInputs.appendChild(newInput);
                 
@@ -421,9 +433,13 @@ data:
                                         <ul class="text-sm text-gray-600 list-disc pl-5">
                                 `;
                                 
-                                workspace.repositories.forEach(repo => {
+                                workspace.repositories.forEach((repo, index) => {
                                     const repoShortName = repo.split('/').pop().replace('.git', '');
-                                    repoListHtml += `<li>${repoShortName} <span class="text-xs text-gray-500">(${repo})</span></li>`;
+                                    let branchInfo = '';
+                                    if (workspace.branches && workspace.branches[index]) {
+                                        branchInfo = ` <span class="text-xs text-blue-600">(${workspace.branches[index]})</span>`;
+                                    }
+                                    repoListHtml += `<li>${repoShortName}${branchInfo} <span class="text-xs text-gray-500">(${repo})</span></li>`;
                                 });
                                 
                                 repoListHtml += `
@@ -432,9 +448,13 @@ data:
                                 `;
                             } else if (workspace.repository) {
                                 // For backward compatibility with old workspaces
+                                let branchInfo = '';
+                                if (workspace.branch) {
+                                    branchInfo = ` <span class="text-xs text-blue-600">(${workspace.branch})</span>`;
+                                }
                                 repoListHtml = `
                                     <div class="mt-2">
-                                        <p class="text-sm text-gray-600">${workspace.repository}</p>
+                                        <p class="text-sm text-gray-600">${workspace.repository}${branchInfo}</p>
                                     </div>
                                 `;
                             }
@@ -499,15 +519,27 @@ data:
                 }
             }
             
-            // Function to create a workspace (updated with auth)
+            // Function to create a workspace (updated with auth and branch support)
             async function createWorkspace() {
-                const repoInputs = document.querySelectorAll('#repoInputs input[type="text"]');
+                const repoInputs = document.querySelectorAll('#repoInputs .repo-input');
 
-                const githubUrls = Array.from(repoInputs)
-                    .map(input => input.value.trim())
-                    .filter(url => url !== '');
+                let repositories = [];
+                let branches = [];
                 
-                if (githubUrls.length === 0) {
+                for (let i = 0; i < repoInputs.length; i++) {
+                    const urlInput = repoInputs[i].querySelector('input[id^="githubUrl"]');
+                    const branchInput = repoInputs[i].querySelector('input[id^="githubBranch"]');
+                    
+                    const url = urlInput ? urlInput.value.trim() : '';
+                    const branch = branchInput ? branchInput.value.trim() : '';
+                    
+                    if (url) {
+                        repositories.push(url);
+                        branches.push(branch || ''); // Empty string for default branch
+                    }
+                }
+
+                if (repositories.length === 0) {
                     alert('Please enter at least one GitHub repository URL');
                     return;
                 }
@@ -515,7 +547,8 @@ data:
                 const githubPat = document.getElementById('githubPat').value.trim();
                 
                 let requestData = {
-                    githubUrls: githubUrls
+                    githubUrls: repositories,
+                    githubBranches: branches
                 };
 
                 if (githubPat) {
@@ -572,12 +605,17 @@ data:
                                         <ul class="list-disc pl-5">
                                 `;
                                 
-                                workspace.repositories.forEach(repo => {
+                                workspace.repositories.forEach((repo, index) => {
                                     const lastSegment = repo.replace(/\/+$/, '').split('/').pop() || '';
                                     const repoShortName = lastSegment.replace('.git', '').replace(/^\/+/, '');
                                     const displayName = repoShortName || 'repository';
                                     
-                                    repoListHtml += `<li>${displayName}</li>`;
+                                    let branchInfo = '';
+                                    if (workspace.branches && workspace.branches[index]) {
+                                        branchInfo = ` (${workspace.branches[index]})`;
+                                    }
+                                    
+                                    repoListHtml += `<li>${displayName}${branchInfo}</li>`;
                                 });
                                 
                                 repoListHtml += `
@@ -610,12 +648,17 @@ data:
                             // Reset the form
                             document.getElementById('createWorkspaceForm').reset();
                             document.getElementById('repoInputs').innerHTML = `
-                                <div class="repo-input flex items-start">
+                                <div class="repo-input">
                                     <div class="w-full">
                                         <label for="githubUrl0" class="block text-gray-700 mb-2">GitHub Repository URL</label>
                                         <input type="text" id="githubUrl0" 
                                             placeholder="https://github.com/username/repository" 
+                                            class="w-full p-2 border border-gray-300 rounded-md mb-2">
+                                        <label for="githubBranch0" class="block text-gray-700 mb-2">Branch (optional)</label>
+                                        <input type="text" id="githubBranch0" 
+                                            placeholder="main (leave empty for default branch)" 
                                             class="w-full p-2 border border-gray-300 rounded-md">
+                                        <p class="text-xs text-gray-500 mt-1">If not specified, the repository's default branch will be used</p>
                                     </div>
                                 </div>
                             `;
