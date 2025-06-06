@@ -13,6 +13,35 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from kubernetes import client, config
 from datetime import datetime
+import jwt
+import bcrypt
+from datetime import datetime, timedelta, timezone
+from functools import wraps
+
+# Add these constants at the top with your other configuration
+JWT_SECRET_KEY = None
+USERS_CONFIG = None
+
+# Load JWT secret and users on startup
+def load_auth_config():
+    global JWT_SECRET_KEY, USERS_CONFIG
+    
+    try:
+        # Get JWT secret from Kubernetes secret
+        secret = core_v1.read_namespaced_secret("workspace-auth-secret", "workspace-system")
+        JWT_SECRET_KEY = base64.b64decode(secret.data.get("jwt-secret")).decode('utf-8')
+        logger.info("Loaded JWT secret from Kubernetes")
+    except Exception as e:
+        logger.error(f"Error loading JWT secret: {e}")
+        JWT_SECRET_KEY = "fallback-secret-key-change-this"
+    
+    try:
+        # Get users from ConfigMap
+        config_map = core_v1.read_namespaced_config_map("workspace-users", "workspace-system")
+        USERS_CONFIG = json.loads(config_map.data.get("users.json", '{"users": []}'))
+        logger.info(f"Loaded {len(USERS_CONFIG.get('users', []))} users")
+    except Exception as e:
+        logger.error(f"Error loading users config: {e}")
 
 app = Flask(__name__)
 CORS(app)
@@ -43,12 +72,47 @@ try:
     WORKSPACE_DOMAIN = config_map.data.get("workspace-domain", "SUBDOMAIN_REPLACE_ME")
     AWS_ACCOUNT_ID = config_map.data.get("aws-account-id", "AWS_ACCOUNT_ID")
     logger.info(f"Using domain: {DOMAIN}, parent domain: {PARENT_DOMAIN}, workspace domain: {WORKSPACE_DOMAIN}")
+
+    load_auth_config()
 except Exception as e:
     logger.error(f"Error reading config map: {e}")
     DOMAIN = "SUBDOMAIN_REPLACE_ME"
     PARENT_DOMAIN = "REPLACE_ME"
     WORKSPACE_DOMAIN = "SUBDOMAIN_REPLACE_ME"
     AWS_ACCOUNT_ID = "AWS_ACCOUNT_ID_REPLACE_ME"
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        
+        # Check for token in Authorization header
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            try:
+                token = auth_header.split(" ")[1]  # Bearer <token>
+            except IndexError:
+                return jsonify({'error': 'Invalid token format'}), 401
+        
+        if not token:
+            return jsonify({'error': 'Token is missing'}), 401
+        
+        try:
+            # Decode the token
+            data = jwt.decode(token, JWT_SECRET_KEY, algorithms=['HS256'])
+            current_user = {
+                'username': data['username'],
+                'role': data.get('role', 'user'),
+                'exp': data['exp']
+            }
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token has expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Token is invalid'}), 401
+        
+        return f(current_user, *args, **kwargs)
+    
+    return decorated
 
 def generate_random_subdomain(length=8):
     """Generate a random subdomain name"""
@@ -61,7 +125,8 @@ def random_password(length=12):
     return ''.join(random.choice(chars) for i in range(length))
 
 @app.route('/api/workspaces', methods=['GET'])
-def list_workspaces():
+@token_required
+def list_workspaces(current_user):
     """List all workspaces"""
     workspaces = []
     
@@ -103,7 +168,8 @@ def list_workspaces():
     return jsonify({"workspaces": workspaces})
 
 @app.route('/api/workspaces', methods=['POST'])
-def create_workspace():
+@token_required
+def create_workspace(current_user):
     """Create a new workspace"""
     # Extract and validate request data
     workspace_config = _extract_workspace_config(request.json)
@@ -2146,7 +2212,8 @@ def _create_code_server_volume_mounts(workspace_config):
     return volume_mounts
 
 @app.route('/api/workspaces/<workspace_id>', methods=['GET'])
-def get_workspace(workspace_id):
+@token_required
+def get_workspace(current_user, workspace_id):
     """Get details for a specific workspace"""
     try:
         # Find the namespace for this workspace
@@ -2184,7 +2251,8 @@ def get_workspace(workspace_id):
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/workspaces/<workspace_id>/delete', methods=['DELETE'])
-def delete_workspace(workspace_id):
+@token_required
+def delete_workspace(current_user, workspace_id):
     """Delete a workspace"""
     try:
         # Find the namespace for this workspace
@@ -2207,7 +2275,8 @@ def delete_workspace(workspace_id):
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/workspaces/<workspace_id>/stop', methods=['POST'])
-def stop_workspace(workspace_id):
+@token_required
+def stop_workspace(current_user, workspace_id):
     """Stop a workspace by scaling it to 0 replicas"""
     try:
         # Find the namespace for this workspace
@@ -2234,7 +2303,8 @@ def stop_workspace(workspace_id):
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/workspaces/<workspace_id>/start', methods=['POST'])
-def start_workspace(workspace_id):
+@token_required
+def start_workspace(current_user, workspace_id):
     """Start a workspace by scaling it to 1 replica"""
     try:
         # Find the namespace for this workspace
@@ -2259,6 +2329,110 @@ def start_workspace(workspace_id):
     except Exception as e:
         logger.error(f"Error starting workspace: {e}")
         return jsonify({"error": str(e)}), 500
+
+# Authentication endpoints
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Authenticate user and return JWT token"""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({
+                'success': False,
+                'error': 'Username and password are required'
+            }), 400
+        
+        # Find user in configuration
+        user = None
+        for u in USERS_CONFIG.get('users', []):
+            if u['username'] == username:
+                user = u
+                break
+        
+        if not user:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid username or password'
+            }), 401
+        
+        # Verify password
+        if not bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid username or password'
+            }), 401
+        
+        # Generate JWT token
+        payload = {
+            'username': user['username'],
+            'role': user.get('role', 'user'),
+            'iat': datetime.now(timezone.utc),
+            'exp': datetime.now(timezone.utc) + timedelta(hours=24)  # Token expires in 24 hours
+        }
+        
+        token = jwt.encode(payload, JWT_SECRET_KEY, algorithm='HS256')
+        
+        return jsonify({
+            'success': True,
+            'token': token,
+            'user': {
+                'username': user['username'],
+                'role': user.get('role', 'user')
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Authentication failed'
+        }), 500
+
+@app.route('/api/auth/verify', methods=['GET'])
+@token_required
+def verify_token(current_user):
+    """Verify if the current token is valid"""
+    return jsonify({
+        'success': True,
+        'user': {
+            'username': current_user['username'],
+            'role': current_user['role']
+        }
+    })
+
+@app.route('/api/auth/refresh', methods=['POST'])
+@token_required
+def refresh_token(current_user):
+    """Refresh the JWT token"""
+    try:
+        # Generate new JWT token
+        payload = {
+            'username': current_user['username'],
+            'role': current_user['role'],
+            'iat': datetime.now(timezone.utc),
+            'exp': datetime.now(timezone.utc) + timedelta(hours=24)
+        }
+        
+        token = jwt.encode(payload, JWT_SECRET_KEY, algorithm='HS256')
+        
+        return jsonify({
+            'success': True,
+            'token': token,
+            'user': {
+                'username': current_user['username'],
+                'role': current_user['role']
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Token refresh error: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Token refresh failed'
+        }), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=3000)

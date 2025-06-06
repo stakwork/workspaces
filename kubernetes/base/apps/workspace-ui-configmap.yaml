@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workspace-users
+  namespace: workspace-system
+data:
+  users.json: |
+    {
+      "users": [
+        {
+          "username": "admin",
+          "password": "${ADMIN_PASSWORD}",
+          "role": "admin"
+        }
+      ]
+    }
