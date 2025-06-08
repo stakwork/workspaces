@@ -1541,6 +1541,8 @@ def _generate_init_script(workspace_ids, workspace_config):
       set -e
       set -x
 
+      git config --global --add safe.directory '*'
+      
       # Ensure the workspace directory exists
       mkdir -p /workspaces
 
