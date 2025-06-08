@@ -1576,6 +1576,9 @@ def _generate_init_script(workspace_ids, workspace_config):
             echo "Cloning {repo_url} branch {branch} into {folder_name}..."
             git clone -b {branch} {repo_url} {folder_name}
         fi
+
+        # Mark repo as safe
+        git config --global --add safe.directory "/workspaces/{folder_name}"
         """
         else:
             init_script += f"""
@@ -1584,6 +1587,9 @@ def _generate_init_script(workspace_ids, workspace_config):
             echo "Cloning {repo_url} into {folder_name}..."
             git clone {repo_url} {folder_name}
         fi
+
+        # Mark repo as safe
+        git config --global --add safe.directory "/workspaces/{folder_name}"
         """
 
         # 🔐 Set the remote URL with GITHUB_TOKEN
