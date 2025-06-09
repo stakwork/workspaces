@@ -1541,6 +1541,8 @@ def _generate_init_script(workspace_ids, workspace_config):
       set -e
       set -x
 
+      git config --global --add safe.directory '*'
+      
       # Ensure the workspace directory exists
       mkdir -p /workspaces
 
@@ -1561,6 +1563,7 @@ def _generate_init_script(workspace_ids, workspace_config):
         # Extract repo name from the URL
         repo_name_parts = repo_url.rstrip('/').split('/')
         folder_name = repo_name_parts[-1].replace('.git', '') if len(repo_name_parts) > 1 else f"repo-{i}"
+        owner = repo_name_parts[-2] if len(repo_name_parts) > 2 else "unknown-owner"
 
         repo_names.append(folder_name)
 
@@ -1573,6 +1576,9 @@ def _generate_init_script(workspace_ids, workspace_config):
             echo "Cloning {repo_url} branch {branch} into {folder_name}..."
             git clone -b {branch} {repo_url} {folder_name}
         fi
+
+        # Mark repo as safe
+        git config --global --add safe.directory "/workspaces/{folder_name}"
         """
         else:
             init_script += f"""
@@ -1580,6 +1586,19 @@ def _generate_init_script(workspace_ids, workspace_config):
         if [ ! -d "/workspaces/{folder_name}" ]; then
             echo "Cloning {repo_url} into {folder_name}..."
             git clone {repo_url} {folder_name}
+        fi
+
+        # Mark repo as safe
+        git config --global --add safe.directory "/workspaces/{folder_name}"
+        """
+
+        # 🔐 Set the remote URL with GITHUB_TOKEN
+        init_script += f"""
+        # Set Git remote URL to use GITHUB_TOKEN
+        if [ ! -z "$GITHUB_TOKEN" ]; then
+            cd /workspaces/{folder_name}
+            git remote set-url origin https://$GITHUB_TOKEN@github.com/{owner}/{folder_name}.git
+            cd ..
         fi
         """
 
