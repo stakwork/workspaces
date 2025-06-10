@@ -240,7 +240,7 @@ def _create_post_start_command():
                 sleep 5
                 apt-get update -y || echo "WARNING: apt-get update failed again, proceeding anyway"
             }
-            apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release git
+            apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release git tmux
 
             # Wait for code-server to be ready before installing extensions
             echo "Waiting for code-server to be ready..."
@@ -414,12 +414,12 @@ def _create_post_start_command():
             fi
             
             # Execute feature installation if the script exists
-            if [ -f /workspaces/install-features.sh ]; then
-                echo "Running feature installation script"
-                /workspaces/install-features.sh
-            else
-                echo "No feature installation script found"
-            fi
+            #if [ -f /workspaces/install-features.sh ]; then
+            #    echo "Running feature installation script"
+            #    /workspaces/install-features.sh
+            #else
+            #    echo "No feature installation script found"
+            #fi
 
             # Run start-docker-compose command if it exists
             if [ -f "/workspaces/start-docker-compose.sh" ]; then
@@ -1060,7 +1060,7 @@ def _create_init_script_configmap(workspace_ids, workspace_config):
             # Install jq if needed for JSON processing
             if ! command -v jq &> /dev/null; then
                 echo "Installing jq to parse devcontainer.json"
-                apt-get update && apt-get install -y jq
+                apt-get update && apt-get install -y jq tmux
             fi
             
             # Extract extensions from devcontainer.json (support both formats)
@@ -1426,24 +1426,6 @@ EOL
 #!/bin/bash
 cd /workspaces
 
-# # Run start-docker-compose command if it exists
-# if [ -f "/workspaces/start-docker-compose.sh" ]; then
-#   echo "Running docker-compose..."
-#   /workspaces/start-docker-compose.sh
-# fi
-
-# # Run post-create command if it exists
-# if [ -f "/workspaces/post-create-command.sh" ]; then
-#   echo "Running postCreateCommand..."
-#   /workspaces/post-create-command.sh
-# fi
-
-# Run post-start command if it exists
-# if [ -f "/workspaces/post-start-command.sh" ]; then
-#   echo "Running postStartCommand..."
-#   /workspaces/post-start-command.sh
-# fi
-
 # Set up VS Code settings if they exist
 if [ -f "/workspaces/.vscode/settings.json" ]; then
   echo "Applying VS Code settings..."
@@ -1463,17 +1445,17 @@ EOL
     """
     
     # Add the feature installation script directly
-    feature_script = _create_feature_installation_script()
-    init_script += """
-            # Create features installation script
-            echo "Creating features installation script"
-            cat > /workspaces/install-features.sh << 'EOL'
-"""
-    init_script += feature_script
-    init_script += """
-EOL
-            chmod +x /workspaces/install-features.sh
-    """
+    #feature_script = _create_feature_installation_script()
+    #init_script += """
+    #        # Create features installation script
+    #        echo "Creating features installation script"
+    #        cat > /workspaces/install-features.sh << 'EOL'
+#"""
+#    init_script += feature_script
+#    init_script += """
+#EOL
+#            chmod +x /workspaces/install-features.sh
+#    """
     
     # Continue with the rest of the script
     init_script += """

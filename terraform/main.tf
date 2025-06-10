@@ -192,9 +192,9 @@ resource "aws_eks_node_group" "workspace_nodes" {
   disk_size       = 80
 
   scaling_config {
-    desired_size = 2
+    desired_size = 3
     min_size     = 1
-    max_size     = 2
+    max_size     = 5
   }
 
   depends_on = [
