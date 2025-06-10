@@ -1486,6 +1486,11 @@ EOL
 # This will be replaced with the tag for the user's custom image
 FROM {AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}
 
+# Configure Git safe directories
+RUN git config --global --add safe.directory /workspaces && \
+    git config --global --add safe.directory '*'
+
+
 # Install code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
@@ -1522,8 +1527,6 @@ def _generate_init_script(workspace_ids, workspace_config):
     init_script = """#!/bin/bash
       set -e
       set -x
-
-      git config --global --add safe.directory '*'
       
       # Ensure the workspace directory exists
       mkdir -p /workspaces
