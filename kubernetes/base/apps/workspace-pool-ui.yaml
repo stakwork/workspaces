@@ -1,0 +1,631 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workspace-pool-ui-config
+  namespace: workspace-system
+data:
+  config.json: |
+    {
+      "vmManagement": {
+        "enabled": true,
+        "refreshInterval": 30,
+        "actions": {
+          "markAsUsed": true,
+          "markAsUnused": true
+        }
+      },
+      "poolListView": {
+        "showAvailableVMs": true,
+        "columns": [
+          "name",
+          "totalVMs",
+          "availableVMs",
+          "status",
+          "actions"
+        ]
+      },
+      "vmModal": {
+        "enabled": true,
+        "refreshInterval": 15,
+        "columns": [
+          "name",
+          "status",
+          "lastUsed",
+          "actions"
+        ]
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workspace-pool-ui-nginx-config
+  namespace: workspace-system
+data:
+  nginx.conf: |
+    server {
+        listen 80;
+        server_name localhost;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Support for SPA routing
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Serve configuration file
+        location /config.json {
+            alias /etc/nginx/pool-ui/config.json;
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workspace-pool-ui-static
+  namespace: workspace-system
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Pool Manager</title>
+        <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    </head>
+    <body class="bg-gray-100 font-sans">
+        <div class="container mx-auto p-4">
+            <!-- Header -->
+            <div class="flex justify-between items-center mb-6">
+                <div class="flex items-center space-x-6">
+                    <h1 class="text-3xl font-bold">Pool Manager</h1>
+                    <a href="/" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md text-sm transition duration-200">
+                        Back to Dashboard
+                    </a>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <select id="poolSelect" class="rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                    <button id="refreshPools" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md transition duration-200">
+                        Refresh Pools
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pool Content -->
+            <div class="bg-white p-6 rounded-lg shadow-md">
+                <h2 class="text-xl font-semibold mb-4">VMs in Pool: <span id="currentPool" class="text-blue-600">-</span></h2>
+                <!-- Pool Stats -->
+                <div class="grid grid-cols-3 gap-4 mb-6">
+                    <div class="bg-blue-50 p-4 rounded-lg">
+                        <h3 class="text-sm font-semibold text-gray-600">Total VMs</h3>
+                        <p id="totalVMs" class="text-2xl font-bold text-blue-600">-</p>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <h3 class="text-sm font-semibold text-gray-600">Available VMs</h3>
+                        <p id="availableVMs" class="text-2xl font-bold text-green-600">-</p>
+                    </div>
+                    <div class="bg-yellow-50 p-4 rounded-lg">
+                        <h3 class="text-sm font-semibold text-gray-600">In Use</h3>
+                        <p id="inUseVMs" class="text-2xl font-bold text-yellow-600">-</p>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table id="vmsTable" class="min-w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">VM ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ready Replicas</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Namespace</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Used</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+      <script>
+        const poolSelect = document.getElementById('poolSelect');
+        const currentPoolSpan = document.getElementById('currentPool');
+        const vmsTableBody = document.querySelector('#vmsTable tbody');
+        const refreshPoolsBtn = document.getElementById('refreshPools');
+
+        async function fetchPools() {
+          try {
+            const res = await fetch('/api/pools');
+            if (!res.ok) throw new Error('Failed to fetch pools');
+            const data = await res.json();
+            poolSelect.innerHTML = '';
+            data.pools.forEach(pool => {
+              const option = document.createElement('option');
+              option.value = pool.name;
+              option.textContent = pool.name;
+              poolSelect.appendChild(option);
+            });
+            if (poolSelect.options.length > 0) {
+              poolSelect.selectedIndex = 0;
+              // Clear any existing polling first
+              clearPoolUpdateCheck();
+              loadAvailableVMs(poolSelect.value).then(() => {
+                // Only start polling after initial load succeeds
+                startPoolUpdateCheck(poolSelect.value);
+              });
+            }
+          } catch (err) {
+            alert(err.message);
+          }
+        }
+
+        async function loadAvailableVMs(poolName) {
+          if (!poolName) return;
+          
+          currentPoolSpan.textContent = poolName;
+          vmsTableBody.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
+          
+          try {
+            // Get all VMs in the pool using the correct endpoint
+            const res = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces`);
+            
+            if (!res.ok) {
+              throw new Error(`Failed to fetch pool VMs: ${res.status} ${res.statusText}`);
+            }
+            const data = await res.json();
+            
+            // Process workspaces to normalize IDs and filter invalid ones
+            const validWorkspaces = data.workspaces.map(vm => {
+              // Either workspace_id or id is valid
+              const effectiveId = vm.workspace_id || vm.id;
+              
+              return {
+                ...vm,
+                workspace_id: effectiveId,
+                id: effectiveId // Keep both fields in sync for consistency
+              };
+            }).filter(vm => {
+              const effectiveId = vm.workspace_id || vm.id;
+              const isValid = effectiveId && effectiveId !== 'undefined';
+              
+              if (!isValid) {
+                console.debug('Filtering out VM with no valid ID:', {
+                  workspace_id: vm.workspace_id,
+                  id: vm.id,
+                  status: vm.status
+                });
+              }
+              return isValid;
+            });
+
+            // Only log truly invalid VMs (those with neither workspace_id nor id)
+            const invalidVMs = data.workspaces.filter(vm => 
+              (!vm.workspace_id || vm.workspace_id === 'undefined') && 
+              (!vm.id || vm.id === 'undefined')
+            );
+            if (invalidVMs.length > 0) {
+              console.warn('Found VMs with no valid IDs:', 
+                JSON.stringify(invalidVMs.map(vm => ({
+                  workspace_id: vm.workspace_id,
+                  id: vm.id,
+                  status: vm.status
+                })))
+              );
+            }
+            
+            // Update stats using only valid workspaces
+            const totalVMs = validWorkspaces.length;
+            const availableVMs = validWorkspaces.filter(vm => !vm.in_use).length;
+            const inUseVMs = validWorkspaces.filter(vm => vm.in_use).length;
+            
+            document.getElementById('totalVMs').textContent = totalVMs;
+            document.getElementById('availableVMs').textContent = availableVMs;
+            document.getElementById('inUseVMs').textContent = inUseVMs;
+            
+            vmsTableBody.innerHTML = '';
+            if (data.workspaces.length === 0) {
+              vmsTableBody.innerHTML = '<tr><td colspan="6">No VMs found in this pool</td></tr>';
+              return;
+            }
+            
+            data.workspaces.forEach(vm => {
+              const tr = document.createElement('tr');
+              const isUsed = vm.in_use;
+              const status = vm.status || (isUsed ? 'In Use' : 'Available');
+              const statusColor = 
+                status === 'Failed' ? 'bg-red-100 text-red-800' :
+                status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+                status === 'In Use' ? 'bg-blue-100 text-blue-800' :
+                'bg-green-100 text-green-800';
+              
+              // Use either workspace_id or id, they're both valid identifiers
+              const workspaceId = vm.workspace_id || vm.id;
+              if (!workspaceId || workspaceId === 'undefined') {
+                console.debug('Skipping VM with no valid ID:', vm);
+                return;
+              }
+
+              tr.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap">${workspaceId}</td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                  <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColor}">
+                    ${status}
+                  </span>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">${vm.ready_replicas ?? '-'}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${vm.namespace ?? '-'}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${vm.last_used ? new Date(vm.last_used).toLocaleString() : 'Never'}</td>
+                <td class="px-6 py-4 whitespace-nowrap space-x-2">
+                  ${isUsed ? 
+                    `<button onclick="releaseVM('${poolName}', '${workspaceId}')" 
+                      class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
+                      Release VM
+                    </button>` 
+                    :
+                    `<button onclick="markUsed('${poolName}', '${workspaceId}')" 
+                      class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm transition duration-200"
+                      ${status === 'Failed' || status === 'Pending' ? 'disabled' : ''}>
+                      Use VM
+                    </button>`
+                  }
+                </td>
+              `;
+              vmsTableBody.appendChild(tr);
+            });
+          } catch (err) {
+            vmsTableBody.innerHTML = `<tr><td colspan="6">Error: ${err.message}</td></tr>`;
+          }
+        }
+
+        async function markUsed(poolName, vmId) {
+          try {
+            if (!vmId || vmId === 'undefined') {
+              throw new Error('Invalid workspace ID');
+            }
+            if (!poolName) {
+              throw new Error('Invalid pool name');
+            }
+
+            // Show loading state
+            const button = document.querySelector(`button[onclick="markUsed('${poolName}', '${vmId}')"]`);
+            if (button) {
+              button.disabled = true;
+              button.textContent = 'Marking as used...';
+            }
+
+            const res = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces/${encodeURIComponent(vmId)}/use`, {
+              method: 'POST',
+            });
+            
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || 'Failed to mark VM as used');
+            }
+            
+            // Immediately refresh to show changes
+            await loadAvailableVMs(poolName);
+            
+            // Set up a quick refresh sequence to catch any delayed state changes
+            const refreshTimes = [1000, 2000, 5000]; // Refresh after 1s, 2s, and 5s
+            refreshTimes.forEach(delay => {
+              setTimeout(() => refreshWithDebounce(true), delay);
+            });
+            
+          } catch (err) {
+            console.error('Error marking VM as used:', err);
+            alert(`Error: ${err.message}`);
+            
+            // Reset button state on error
+            const button = document.querySelector(`button[onclick="markUsed('${poolName}', '${vmId}')"]`);
+            if (button) {
+              button.disabled = false;
+              button.textContent = 'Use VM';
+            }
+          }
+        }
+
+        async function releaseVM(poolName, vmId) {
+          try {
+            if (!vmId || vmId === 'undefined') {
+              throw new Error('Invalid workspace ID');
+            }
+            if (!poolName) {
+              throw new Error('Invalid pool name');
+            }
+
+            // Show loading state
+            const button = document.querySelector(`button[onclick="releaseVM('${poolName}', '${vmId}')"]`);
+            if (button) {
+              button.disabled = true;
+              button.textContent = 'Releasing...';
+            }
+
+            const res = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces/${encodeURIComponent(vmId)}/release`, {
+              method: 'POST',
+            });
+            
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || 'Failed to release VM');
+            }
+            
+            // Immediately refresh to show changes
+            await loadAvailableVMs(poolName);
+            
+            // Set up a quick refresh sequence to catch any delayed state changes
+            const refreshTimes = [1000, 2000, 5000]; // Refresh after 1s, 2s, and 5s
+            refreshTimes.forEach(delay => {
+              setTimeout(() => refreshWithDebounce(true), delay);
+            });
+            
+          } catch (err) {
+            console.error('Error releasing VM:', err);
+            alert(`Error: ${err.message}`);
+            
+            // Reset button state on error
+            const button = document.querySelector(`button[onclick="releaseVM('${poolName}', '${vmId}')"]`);
+            if (button) {
+              button.disabled = false;
+              button.textContent = 'Release VM';
+            }
+          }
+        }
+
+        poolSelect.addEventListener('change', () => {
+          const selectedPool = poolSelect.value;
+          clearPoolUpdateCheck(); // Clear any existing polling
+          loadAvailableVMs(selectedPool).then(() => {
+            // Only start polling after initial load succeeds
+            startPoolUpdateCheck(selectedPool);
+          });
+        });
+
+        refreshPoolsBtn.addEventListener('click', async () => {
+          clearPoolUpdateCheck();
+          await fetchPools();
+        });
+
+        // Track if we need to force refresh
+        let forceRefreshNeeded = false;
+        let lastRefreshTime = Date.now();
+        const MIN_REFRESH_INTERVAL = 2000; // 2 seconds minimum between refreshes
+
+        // Function to refresh with debouncing
+        async function refreshWithDebounce(force = false) {
+          const now = Date.now();
+          const timeSinceLastRefresh = now - lastRefreshTime;
+
+          if (force) {
+            forceRefreshNeeded = true;
+          }
+
+          // If we haven't waited long enough between refreshes, schedule one
+          if (timeSinceLastRefresh < MIN_REFRESH_INTERVAL) {
+            if (!forceRefreshNeeded) {
+              return; // Skip if not forced and too soon
+            }
+            
+            // For forced refreshes, wait the minimum time
+            await new Promise(resolve => setTimeout(resolve, MIN_REFRESH_INTERVAL - timeSinceLastRefresh));
+          }
+
+          const currentPool = poolSelect.value;
+          if (currentPool) {
+            try {
+              await loadAvailableVMs(currentPool);
+              lastRefreshTime = Date.now();
+              forceRefreshNeeded = false;
+            } catch (error) {
+              console.error('Error refreshing VMs:', error);
+              // Don't update lastRefreshTime on error so we can retry sooner
+              if (error.message.includes('404')) {
+                // If pool no longer exists, try to reload pools
+                await fetchPools();
+              }
+            }
+          }
+        }
+
+        // Auto-refresh settings
+        const REFRESH_INTERVAL = 15000; // 15 seconds
+        setInterval(() => refreshWithDebounce(true), REFRESH_INTERVAL);
+
+        // Set up visibility change handler to refresh when tab becomes visible
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            refreshWithDebounce(true);
+          }
+        });
+
+        // Monitor hash changes to detect pool updates
+        window.addEventListener('hashchange', () => {
+          if (window.location.hash.startsWith('#pool-')) {
+            refreshWithDebounce(true);
+          }
+        });
+
+        // Set up polling for pool updates by checking the VMs directly
+        function clearPoolUpdateCheck() {
+          if (window.poolUpdateCheck) {
+            clearInterval(window.poolUpdateCheck);
+            delete window.poolUpdateCheck;
+          }
+        }
+
+        function startPoolUpdateCheck(poolName) {
+          clearPoolUpdateCheck(); // Clear any existing interval
+          
+          if (!poolName) return;
+
+          // Keep track of consecutive errors
+          let errorCount = 0;
+          const MAX_ERRORS = 3; // Stop polling after 3 consecutive errors
+          
+          window.poolUpdateCheck = setInterval(async () => {
+            // Don't poll if we've lost the pool selection
+            if (!poolSelect.value || poolSelect.value !== poolName) {
+              clearPoolUpdateCheck();
+              return;
+            }
+            
+            try {
+              const response = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces`, {
+                headers: {
+                  'Cache-Control': 'no-cache',
+                  'Pragma': 'no-cache'
+                }
+              });
+              
+              // Handle different types of errors
+              if (!response.ok) {
+                const status = response.status;
+                // Don't treat 404s as fatal errors
+                if (status === 404) {
+                  console.debug('Pool not found, will retry');
+                  return;
+                }
+                throw new Error(`HTTP ${status} ${response.statusText}`);
+              }
+              
+              const data = await response.json();
+              if (!data || !Array.isArray(data.workspaces)) {
+                throw new Error('Invalid response format');
+              }
+
+              // Reset error count on successful response
+              errorCount = 0;
+
+              // Normalize and sort VM data for stable comparison
+              const normalizeVMState = (workspaces) => {
+                return workspaces
+                  .map(vm => ({
+                    id: vm.workspace_id || vm.id,
+                    status: vm.status || (vm.in_use ? 'In Use' : 'Available'),
+                    in_use: !!vm.in_use,
+                    ready_replicas: vm.ready_replicas || 0
+                  }))
+                  .filter(vm => vm.id && vm.id !== 'undefined')
+                  .sort((a, b) => a.id.localeCompare(b.id));
+              };
+
+              const currentState = JSON.stringify(normalizeVMState(data.workspaces));
+              const previousState = window.poolUpdateCheck.previousState;
+              
+              // Compare states and update if changed
+              if (!previousState || previousState !== currentState) {
+                window.poolUpdateCheck.previousState = currentState;
+                refreshWithDebounce(true);
+              }
+            } catch (error) {
+              console.error('Pool update check error:', error);
+              errorCount++;
+              
+              // Handle consecutive errors
+              if (errorCount >= MAX_ERRORS) {
+                console.error('Too many consecutive errors, stopping pool updates');
+                clearPoolUpdateCheck();
+                vmsTableBody.innerHTML = `
+                  <tr>
+                    <td colspan="6" class="text-red-500">
+                      Error checking pool status: ${error.message}<br>
+                      <button onclick="retryPoolUpdates('${poolName}')" class="text-blue-500 underline mt-2">
+                        Click to retry
+                      </button>
+                    </td>
+                  </tr>
+                `;
+                return;
+              }
+              
+              // Only show error UI for non-404 errors
+              if (!error.message.includes('404')) {
+                vmsTableBody.innerHTML = `<tr><td colspan="6">Error checking pool status: ${error.message}</td></tr>`;
+              }
+            }
+          }, REFRESH_INTERVAL);
+        }
+
+        // Function to retry pool updates after errors
+        function retryPoolUpdates(poolName) {
+          if (poolName === poolSelect.value) {
+            loadAvailableVMs(poolName).then(() => {
+              startPoolUpdateCheck(poolName);
+            });
+          }
+        }
+
+        // Start polling when a pool is selected
+        startPoolUpdateCheck(poolSelect.value);
+
+        // Initial load
+        fetchPools();
+      </script>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-pool-ui
+  namespace: workspace-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workspace-pool-ui
+  template:
+    metadata:
+      labels:
+        app: workspace-pool-ui
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: pool-ui-static
+          mountPath: /usr/share/nginx/html
+        - name: pool-ui-config
+          mountPath: /etc/nginx/pool-ui
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d/default.conf
+          subPath: nginx.conf
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      volumes:
+      - name: pool-ui-static
+        configMap:
+          name: workspace-pool-ui-static
+          items:
+          - key: index.html
+            path: index.html
+      - name: pool-ui-config
+        configMap:
+          name: workspace-pool-ui-config
+      - name: nginx-config
+        configMap:
+          name: workspace-pool-ui-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-pool-ui
+  namespace: workspace-system
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+  selector:
+    app: workspace-pool-ui

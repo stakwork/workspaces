@@ -17,6 +17,8 @@ import jwt
 import bcrypt
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from routes.pool_routes import pool_routes, configure_routes
+from services.pool_service import PoolService
 
 # Add these constants at the top with your other configuration
 JWT_SECRET_KEY = None
@@ -49,6 +51,36 @@ CORS(app)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Initialize Kubernetes clients
+try:
+    # Load in-cluster config
+    config.load_incluster_config()
+    logger.info("Loaded in-cluster Kubernetes configuration")
+except config.config_exception.ConfigException:
+    # Load kubeconfig for local development
+    config.load_kube_config()
+    logger.info("Loaded kubeconfig for local development")
+
+# Initialize Kubernetes clients
+core_v1 = client.CoreV1Api()
+apps_v1 = client.AppsV1Api()
+networking_v1 = client.NetworkingV1Api()
+
+# Set up JWT configuration
+app.config['JWT_SECRET_KEY'] = JWT_SECRET_KEY
+
+# Import routes first
+from routes import pool_routes
+
+# Initialize services
+pool_service = PoolService(core_v1=core_v1, apps_v1=apps_v1)
+
+# Configure routes with service
+configure_routes(pool_service)
+
+# Register blueprint
+app.register_blueprint(pool_routes)
 
 try:
     # Load in-cluster config
@@ -734,7 +766,6 @@ if feature_exists "node"; then
     else
         nvm install "$VERSION"
     fi
-    
     # Add NVM to shell initialization
     echo 'export NVM_DIR="$HOME/.nvm"' >> /etc/profile.d/nvm.sh
     echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> /etc/profile.d/nvm.sh
@@ -1964,7 +1995,7 @@ def _create_workspace_init_container():
             name="GITHUB_TOKEN",
             value_from=client.V1EnvVarSource(
                 secret_key_ref=client.V1SecretKeySelector(
-                    name="workspace-secret",
+                                       name="workspace-secret",
                     key="github_token",
                     optional=True
                 )
@@ -2126,12 +2157,6 @@ def _create_volumes(workspace_ids):
                 name="port-detector",
                 default_mode=0o755
             )
-        # ),
-        # client.V1Volume(
-        #     name="registry-ca",
-        #     config_map=client.V1ConfigMapVolumeSource(
-        #         name="registry-ca"
-        #     )
         )
     ]
 
@@ -2158,17 +2183,12 @@ def create_service_workspace_account(workspace_namespace):
 
 def _create_code_server_container(workspace_ids, workspace_config):
     """Create the main code-server container"""
-    # Set the container image based on configuration
-    # container_image = workspace_config['custom_image']
     image_pull_policy = "Always"
 
     return client.V1Container(
         name="code-server",
         image=f"{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
         image_pull_policy=image_pull_policy,
-        # ports=[
-        #     client.V1ContainerPort(container_port=8444)
-        # ],
         env=[
             # LinuxServer.io specific environment variables
             client.V1EnvVar(name="PUID", value="1000"),  # User ID
@@ -2243,11 +2263,6 @@ def _create_code_server_volume_mounts(workspace_config):
         client.V1VolumeMount(
             name="docker-sock",
             mount_path="/var/run"
-        # ),
-        # client.V1VolumeMount(
-        #     name="registry-ca",
-        #     mount_path="/usr/local/share/ca-certificates/registry-ca.crt",
-        #     sub_path="ca.crt"
         )
     ]
     
@@ -2261,6 +2276,68 @@ def _create_code_server_volume_mounts(workspace_config):
         )
     
     return volume_mounts
+
+@app.route('/api/pools/<pool_name>', methods=['GET'])
+@token_required
+def get_pool(current_user, pool_name):
+    """Get details for a specific pool"""
+    try:
+        pool = pool_service.get_pool(pool_name)
+        if pool:
+            # Convert to dict and remove sensitive data
+            pool_dict = pool.to_dict()
+            if 'github_pat' in pool_dict:
+                del pool_dict['github_pat']
+            return jsonify(pool_dict)
+        return jsonify({"error": "Pool not found"}), 404
+    except Exception as e:
+        logger.error(f"Error getting pool: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/pools/<pool_name>', methods=['PUT'])
+@token_required
+def update_pool(current_user, pool_name):
+    """Update an existing pool"""
+    try:
+        data = request.get_json()
+        required_fields = ['name', 'minimum_vms', 'repo_name']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+
+        # Validate minimum_vms
+        try:
+            minimum_vms = int(data['minimum_vms'])
+            if minimum_vms < 1:
+                return jsonify({"error": "minimum_vms must be at least 1"}), 400
+        except ValueError:
+            return jsonify({"error": "minimum_vms must be a valid integer"}), 400
+
+        # Optional fields
+        branch_name = data.get('branch_name')
+        github_pat = data.get('github_pat')
+
+        # Update the pool
+        success = pool_service.update_pool(
+            original_name=pool_name,
+            new_name=data['name'],
+            minimum_vms=minimum_vms,
+            repo_name=data['repo_name'],
+            branch_name=branch_name,
+            github_pat=github_pat
+        )
+
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Pool {pool_name} updated successfully"
+            })
+        else:
+            return jsonify({"error": "Pool not found"}), 404
+
+    except Exception as e:
+        logger.error(f"Error updating pool: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/workspaces/<workspace_id>', methods=['GET'])
 @token_required

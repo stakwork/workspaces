@@ -25,6 +25,13 @@ spec:
             name: workspace-controller
             port:
               number: 3000
+      - path: /pools
+        pathType: Prefix
+        backend:
+          service:
+            name: workspace-pool-ui
+            port:
+              number: 80
       - path: /
         pathType: Prefix
         backend:
