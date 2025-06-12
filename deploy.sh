@@ -113,7 +113,9 @@ kubectl apply -f ./kubernetes/base/apps/workspace-ui-secret-generated.yaml
 envsubst '${ADMIN_PASSWORD}' < ./kubernetes/base/apps/workspace-ui-configmap.yaml > ./kubernetes/base/apps/workspace-ui-configmap-generated.yaml
 kubectl apply -f ./kubernetes/base/apps/workspace-ui-configmap-generated.yaml
 
-kubectl apply -f ./kubernetes/base/apps/workspace-pool-ui.yaml
+envsubst < ./kubernetes/base/apps/workspace-pool-ui.yaml > ./kubernetes/base/apps/workspace-pool-ui-generated.yaml
+kubectl apply -f ./kubernetes/base/apps/workspace-pool-ui-generated.yaml
+
 kubectl apply -f ./kubernetes/base/apps/workspace-ui.yaml
 
 # Step 10: Apply Port Detector RBAC

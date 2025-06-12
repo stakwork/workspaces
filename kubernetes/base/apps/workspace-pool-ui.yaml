@@ -239,7 +239,7 @@ data:
         const refreshPoolsBtn = document.getElementById('refreshPools');
         
         // Workspace domain configuration
-        const WORKSPACE_DOMAIN = 'workspaces.turiz.space'; // This should match your configuration
+        const WORKSPACE_DOMAIN = '${SUBDOMAIN_REPLACE_ME}'; // This should match your configuration
 
         // Function to construct workspace URL
         function getWorkspaceUrl(vm) {
