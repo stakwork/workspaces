@@ -569,7 +569,21 @@ data:
                             workspaceEl.className = 'border border-gray-200 rounded-md p-4';
                             
                             // Safely get repository name
-                            const repoName = workspace.repoName || (workspace.repositories?.[0] || workspace.repository).split('/').pop().replace('.git', '');
+                            let repoName;
+                            try {
+                                if (workspace.repositories && workspace.repositories.length > 0) {
+                                    repoName = workspace.repositories[0].split('/').pop().replace('.git', '');
+                                } else if (workspace.repository) {
+                                    repoName = workspace.repository.split('/').pop().replace('.git', '');
+                                } else if (workspace.repoName) {
+                                    repoName = workspace.repoName;
+                                } else {
+                                    return;
+                                }
+                            } catch (e) {
+                                console.warn('Error parsing repository name:', e);
+                                repoName = 'Unnamed Workspace';
+                            }
                             try {
                                 if (workspace.repoName) {
                                     repoName = workspace.repoName;
