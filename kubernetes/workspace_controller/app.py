@@ -246,229 +246,242 @@ def create_workspace(current_user):
         return jsonify({"error": str(e)}), 500
 
 def _create_post_start_command():
-    """Create the post-start command for Docker setup with explicit Debian/Ubuntu handling"""
+    """Create the post-start command for Docker setup with explicit Debian/Ubuntu handling - runs in background"""
     return [
         "/bin/bash",
         "-c", 
         """
-            exec > /workspaces/poststart.log 2>&1
-            echo "Starting post-start initialization at $(date)"
-
-            # Detect OS distribution
-            if [ -f /etc/os-release ]; then
-                . /etc/os-release
-                OS=$ID
-                VERSION_CODENAME=$VERSION_CODENAME
-                echo "Detected OS: $OS $VERSION_CODENAME"
-            else
-                echo "Cannot detect OS, assuming Ubuntu"
-                OS="ubuntu"
-                VERSION_CODENAME="focal"
-            fi
-
-            # Install common dependencies
-            apt-get update -y || {
-                echo "WARNING: apt-get update failed, retrying with a delay"
-                sleep 5
-                apt-get update -y || echo "WARNING: apt-get update failed again, proceeding anyway"
-            }
-            apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release git tmux
-
-            # Wait for code-server to be ready before installing extensions
-            echo "Waiting for code-server to be ready..."
-            timeout=60
-            while ! pgrep -f "code-server" > /dev/null; do
-                echo "Waiting for code-server process to start..."
-                sleep 2
-                timeout=$((timeout - 1))
-                if [ $timeout -le 0 ]; then
-                    echo "Timeout waiting for code-server"
-                    break
-                fi
-            done
-
-            # Additional wait to ensure code-server is fully ready
-            sleep 10
-
-            # Check and install any extensions from devcontainer.json if not already installed
-            if [ -f /workspaces/install-extensions.sh ] && [ -f /workspaces/.extensions-list ]; then
-                echo "Running extension installation script again to ensure all extensions are installed"
-                /workspaces/install-extensions.sh
-            fi
-
-            echo "Installing Docker for $OS $VERSION_CODENAME"
+            # Create status file to track progress
+            echo "STARTING" > /workspaces/setup-status
             
-            # Function to check if Docker is running
-            docker_running() {
-                docker info &>/dev/null
-            }
-            
-            # Function to check if Docker CLI is installed
-            docker_installed() {
-                command -v docker &>/dev/null
-            }
-            
-            # Function to start Docker daemon
-            start_docker_daemon() {
-                echo "Starting Docker daemon"
-                mkdir -p /var/run/docker
-                chown root:docker /var/run/docker
-                chmod 770 /var/run/docker
-                
-                # Check if dockerd is already running
-                if pgrep dockerd; then
-                    echo "Docker daemon is already running"
-                    return 0
-                fi
-                
-                # Start Docker daemon
-                dockerd \
-                    --host=unix:///var/run/docker.sock \
-                    --host=tcp://127.0.0.1:2376 \
-                    --storage-driver=overlay2 \
-                    --tls=false &
-                DOCKER_PID=$!
-                echo "Docker daemon started with PID: $DOCKER_PID"
-                
-                # Wait for Docker to start
-                timeout=30
-                while ! docker_running; do
-                    echo "Waiting for docker to start..."
-                    if [ $timeout -le 0 ]; then
-                        echo "Docker daemon failed to start"
-                        return 1
-                    fi
-                    timeout=$((timeout - 1))
-                    sleep 1
-                done
-                
-                # Set proper permissions on Docker socket
-                echo "Setting Docker socket permissions"
-                chown root:docker /var/run/docker.sock
-                chmod 666 /var/run/docker.sock
-                
-                return 0
-            }
-            
-            # Install Docker based on distribution
-            if [ "$OS" = "debian" ]; then
-                # Debian-specific Docker installation
-                echo "Setting up Docker for Debian $VERSION_CODENAME"
-                
-                # Install Docker using Debian approach
-                install -m 0755 -d /etc/apt/keyrings
-                curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-                chmod a+r /etc/apt/keyrings/docker.gpg
-                
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $VERSION_CODENAME stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-                
-                apt-get update -y
-                # Try to install Docker CE packages, with fallback
-                apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
-                    echo "Standard Docker packages failed to install for Debian, trying docker.io"
-                    apt-get install -y docker.io
-                }
-            elif [ "$OS" = "ubuntu" ]; then
-                # Ubuntu-specific Docker installation
-                echo "Setting up Docker for Ubuntu $VERSION_CODENAME"
-                
-                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-                
-                apt-get update -y
-                apt-get install -y docker-ce docker-ce-cli containerd.io || {
-                    echo "Standard Docker packages failed to install for Ubuntu, trying docker.io"
-                    apt-get install -y docker.io
-                }
-            else
-                # Fallback for other distributions
-                echo "Unknown distribution: $OS, attempting generic Docker installation"
-                apt-get install -y docker.io || {
-                    echo "Could not install docker.io, trying snap"
-                    apt-get install -y snapd
-                    snap install docker
-                }
-            fi
+            # Run the entire setup in background
+            nohup bash -c '
+                exec > /workspaces/poststart.log 2>&1
+                echo "Starting post-start initialization at $(date)"
+                echo "RUNNING" > /workspaces/setup-status
 
-            echo "Docker installed. Checking version:"
-            docker --version || echo "Docker command not found"
-            
-            # Setup Docker user and permissions
-            echo "Setting up Docker group and permissions"
-            groupadd -f docker
-            getent passwd root > /dev/null && usermod -aG docker root
-            getent passwd abc > /dev/null && usermod -aG docker abc
-            getent passwd coder > /dev/null && usermod -aG docker coder
-            getent passwd vscode > /dev/null && usermod -aG docker vscode
-            
-            # Start the Docker daemon if not already running
-            if ! docker_running; then
-                start_docker_daemon
-            fi
-            
-            # Verify Docker is working
-            if docker_running; then
-                echo "Docker daemon started successfully"
-                # Pull a few common images to speed up future operations
-                echo "Pulling common Docker images in background"
-                docker pull hello-world &>/dev/null &
-                docker pull node:lts-slim &>/dev/null &
-                docker pull python:3-slim &>/dev/null &
-            else
-                echo "WARNING: Docker daemon is not running properly"
-                echo "Trying to fix Docker setup..."
-                
-                # Try to fix Docker setup
-                pkill dockerd
-                sleep 2
-                rm -f /var/run/docker.pid
-                rm -f /var/run/docker.sock
-                
-                start_docker_daemon
-                
-                if docker_running; then
-                    echo "Docker fixed and is now running"
+                # Detect OS distribution
+                if [ -f /etc/os-release ]; then
+                    . /etc/os-release
+                    OS=$ID
+                    VERSION_CODENAME=$VERSION_CODENAME
+                    echo "Detected OS: $OS $VERSION_CODENAME"
                 else
-                    echo "WARNING: Could not fix Docker, it may not be available"
+                    echo "Cannot detect OS, assuming Ubuntu"
+                    OS="ubuntu"
+                    VERSION_CODENAME="focal"
                 fi
-            fi
+
+                # Install common dependencies
+                apt-get update -y || {
+                    echo "WARNING: apt-get update failed, retrying with a delay"
+                    sleep 5
+                    apt-get update -y || echo "WARNING: apt-get update failed again, proceeding anyway"
+                }
+                apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release git tmux
+
+                # Wait for code-server to be ready before installing extensions
+                echo "Waiting for code-server to be ready..."
+                timeout=60
+                while ! pgrep -f "code-server" > /dev/null; do
+                    echo "Waiting for code-server process to start..."
+                    sleep 2
+                    timeout=$((timeout - 1))
+                    if [ $timeout -le 0 ]; then
+                        echo "Timeout waiting for code-server"
+                        break
+                    fi
+                done
+
+                # Additional wait to ensure code-server is fully ready
+                sleep 10
+
+                # Check and install any extensions from devcontainer.json if not already installed
+                if [ -f /workspaces/install-extensions.sh ] && [ -f /workspaces/.extensions-list ]; then
+                    echo "Running extension installation script again to ensure all extensions are installed"
+                    /workspaces/install-extensions.sh
+                fi
+
+                echo "Installing Docker for $OS $VERSION_CODENAME"
+                
+                # Function to check if Docker is running
+                docker_running() {
+                    docker info &>/dev/null
+                }
+                
+                # Function to check if Docker CLI is installed
+                docker_installed() {
+                    command -v docker &>/dev/null
+                }
+                
+                # Function to start Docker daemon
+                start_docker_daemon() {
+                    echo "Starting Docker daemon"
+                    mkdir -p /var/run/docker
+                    chown root:docker /var/run/docker
+                    chmod 770 /var/run/docker
+                    
+                    # Check if dockerd is already running
+                    if pgrep dockerd; then
+                        echo "Docker daemon is already running"
+                        return 0
+                    fi
+                    
+                    # Start Docker daemon
+                    dockerd \
+                        --host=unix:///var/run/docker.sock \
+                        --host=tcp://127.0.0.1:2376 \
+                        --storage-driver=overlay2 \
+                        --tls=false &
+                    DOCKER_PID=$!
+                    echo "Docker daemon started with PID: $DOCKER_PID"
+                    
+                    # Wait for Docker to start
+                    timeout=30
+                    while ! docker_running; do
+                        echo "Waiting for docker to start..."
+                        if [ $timeout -le 0 ]; then
+                            echo "Docker daemon failed to start"
+                            return 1
+                        fi
+                        timeout=$((timeout - 1))
+                        sleep 1
+                    done
+                    
+                    # Set proper permissions on Docker socket
+                    echo "Setting Docker socket permissions"
+                    chown root:docker /var/run/docker.sock
+                    chmod 666 /var/run/docker.sock
+                    
+                    return 0
+                }
+                
+                # Install Docker based on distribution
+                if [ "$OS" = "debian" ]; then
+                    # Debian-specific Docker installation
+                    echo "Setting up Docker for Debian $VERSION_CODENAME"
+                    
+                    # Install Docker using Debian approach
+                    install -m 0755 -d /etc/apt/keyrings
+                    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                    chmod a+r /etc/apt/keyrings/docker.gpg
+                    
+                    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $VERSION_CODENAME stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+                    
+                    apt-get update -y
+                    # Try to install Docker CE packages, with fallback
+                    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
+                        echo "Standard Docker packages failed to install for Debian, trying docker.io"
+                        apt-get install -y docker.io
+                    }
+                elif [ "$OS" = "ubuntu" ]; then
+                    # Ubuntu-specific Docker installation
+                    echo "Setting up Docker for Ubuntu $VERSION_CODENAME"
+                    
+                    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+                    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+                    
+                    apt-get update -y
+                    apt-get install -y docker-ce docker-ce-cli containerd.io || {
+                        echo "Standard Docker packages failed to install for Ubuntu, trying docker.io"
+                        apt-get install -y docker.io
+                    }
+                else
+                    # Fallback for other distributions
+                    echo "Unknown distribution: $OS, attempting generic Docker installation"
+                    apt-get install -y docker.io || {
+                        echo "Could not install docker.io, trying snap"
+                        apt-get install -y snapd
+                        snap install docker
+                    }
+                fi
+
+                echo "Docker installed. Checking version:"
+                docker --version || echo "Docker command not found"
+                
+                # Setup Docker user and permissions
+                echo "Setting up Docker group and permissions"
+                groupadd -f docker
+                getent passwd root > /dev/null && usermod -aG docker root
+                getent passwd abc > /dev/null && usermod -aG docker abc
+                getent passwd coder > /dev/null && usermod -aG docker coder
+                getent passwd vscode > /dev/null && usermod -aG docker vscode
+                
+                # Start the Docker daemon if not already running
+                if ! docker_running; then
+                    start_docker_daemon
+                fi
+                
+                # Verify Docker is working
+                if docker_running; then
+                    echo "Docker daemon started successfully"
+                    # Pull a few common images to speed up future operations
+                    echo "Pulling common Docker images in background"
+                    docker pull hello-world &>/dev/null &
+                    docker pull node:lts-slim &>/dev/null &
+                    docker pull python:3-slim &>/dev/null &
+                else
+                    echo "WARNING: Docker daemon is not running properly"
+                    echo "Trying to fix Docker setup..."
+                    
+                    # Try to fix Docker setup
+                    pkill dockerd
+                    sleep 2
+                    rm -f /var/run/docker.pid
+                    rm -f /var/run/docker.sock
+                    
+                    start_docker_daemon
+                    
+                    if docker_running; then
+                        echo "Docker fixed and is now running"
+                    else
+                        echo "WARNING: Could not fix Docker, it may not be available"
+                        echo "ERROR" > /workspaces/setup-status
+                        exit 1
+                    fi
+                fi
+                
+                # Install Docker Compose if not already installed
+                if ! command -v docker-compose &>/dev/null; then
+                    echo "Installing Docker Compose"
+                    mkdir -p /usr/local/lib/docker/cli-plugins
+                    COMPOSE_VERSION="v2.24.6"
+                    curl -SL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
+                    chmod +x /usr/local/bin/docker-compose
+                    ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+                    echo "Docker Compose installed:"
+                    docker-compose --version || echo "Docker Compose installation failed"
+                fi
+                
+                # Execute feature installation if the script exists
+                #if [ -f /workspaces/install-features.sh ]; then
+                #    echo "Running feature installation script"
+                #    /workspaces/install-features.sh
+                #else
+                #    echo "No feature installation script found"
+                #fi
+
+                # Run start-docker-compose command if it exists
+                if [ -f "/workspaces/start-docker-compose.sh" ]; then
+                    echo "Running docker-compose..."
+                    /workspaces/start-docker-compose.sh
+                fi
+
+                cd /workspaces
+
+                # Run post-create command if it exists
+                if [ -f "/workspaces/post-create-command.sh" ]; then
+                    echo "Running postCreateCommand..."
+                    /workspaces/post-create-command.sh
+                fi
+
+                echo "Post-start initialization completed at $(date)"
+                echo "COMPLETE" > /workspaces/setup-status
+                
+            ' > /workspaces/background-setup.log 2>&1 &
             
-            # Install Docker Compose if not already installed
-            if ! command -v docker-compose &>/dev/null; then
-                echo "Installing Docker Compose"
-                mkdir -p /usr/local/lib/docker/cli-plugins
-                COMPOSE_VERSION="v2.24.6"
-                curl -SL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
-                chmod +x /usr/local/bin/docker-compose
-                ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
-                echo "Docker Compose installed:"
-                docker-compose --version || echo "Docker Compose installation failed"
-            fi
-            
-            # Execute feature installation if the script exists
-            #if [ -f /workspaces/install-features.sh ]; then
-            #    echo "Running feature installation script"
-            #    /workspaces/install-features.sh
-            #else
-            #    echo "No feature installation script found"
-            #fi
-
-            # Run start-docker-compose command if it exists
-            if [ -f "/workspaces/start-docker-compose.sh" ]; then
-                echo "Running docker-compose..."
-                /workspaces/start-docker-compose.sh
-            fi
-
-            cd /workspaces
-
-            # Run post-create command if it exists
-            if [ -f "/workspaces/post-create-command.sh" ]; then
-                echo "Running postCreateCommand..."
-                /workspaces/post-create-command.sh
-            fi
-
-            
-            echo "Post-start initialization completed at $(date)"
+            echo "Background setup started. Check /workspaces/setup-status for progress."
+            echo "Logs available at: /workspaces/poststart.log and /workspaces/background-setup.log"
         """
     ]
 
