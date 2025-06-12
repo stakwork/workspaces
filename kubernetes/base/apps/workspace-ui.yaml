@@ -307,7 +307,7 @@ data:
             let repoCounter = 1;
             let authToken = null;
             let currentUser = null;
-            
+
             // Authentication utilities
             class Auth {
                 static getToken() {
@@ -564,10 +564,24 @@ data:
                         workspacesList.innerHTML = '';
                         
                         data.workspaces.forEach(workspace => {
+                            if (!workspace) return; // Skip if workspace is undefined
                             const workspaceEl = document.createElement('div');
                             workspaceEl.className = 'border border-gray-200 rounded-md p-4';
                             
+                            // Safely get repository name
                             const repoName = workspace.repoName || (workspace.repositories?.[0] || workspace.repository).split('/').pop().replace('.git', '');
+                            try {
+                                if (workspace.repoName) {
+                                    repoName = workspace.repoName;
+                                } else if (workspace.repositories && workspace.repositories.length > 0) {
+                                    repoName = workspace.repositories[0].split('/').pop().replace('.git', '');
+                                } else if (workspace.repository) {
+                                    repoName = workspace.repository.split('/').pop().replace('.git', '');
+                                }
+                            } catch (e) {
+                                console.warn('Error parsing repository name:', e);
+                            }
+                            
                             const stateBadge = getStateBadge(workspace.state || 'unknown');
 
                             // Create repository list HTML
@@ -620,15 +634,17 @@ data:
                                             <h3 class="font-semibold text-lg">${repoName}</h3>
                                             <span class="ml-2">${stateBadge}</span>
                                         </div>
-                                        ${repoListHtml}
-                                        <p class="mt-1 text-xs text-gray-500">ID: ${workspace.id}</p>
-                                        <p class="mt-1 text-xs text-gray-500">Subdomain: ${workspace.fqdn}</p>
+                                        ${repoListHtml || ''}
+                                        ${workspace.id ? `<p class="mt-1 text-xs text-gray-500">ID: ${workspace.id}</p>` : ''}
+                                        ${workspace.fqdn ? `<p class="mt-1 text-xs text-gray-500">Subdomain: ${workspace.fqdn}</p>` : ''}
                                         ${imageInfoHtml}
+                                        ${workspace.url ? `
                                         <p class="mt-2">
                                             <a href="${workspace.url}" target="_blank" class="text-blue-500 hover:underline">
                                                 Open Workspace
                                             </a>
                                         </p>
+                                        ` : ''}
                                     </div>
                                     <div class="space-x-2">
                                         <button onclick="startWorkspace('${workspace.id}')" 
@@ -1014,12 +1030,6 @@ data:
                                                 <h4 class="text-sm font-medium text-gray-500">Target VMs</h4>
                                                 <p class="text-2xl font-bold text-blue-600">${targetVMs}</p>
                                             </div>
-                                            <div class="flex items-center justify-center">
-                                                <button onclick="usePoolVMs('${pool.name}')" 
-                                                    class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md transition duration-200 w-full">
-                                                    Manage VMs
-                                                </button>
-                                            </div>
                                         </div>
                                     </div>
                                     
@@ -1079,123 +1089,20 @@ data:
                     // Count available and in-use VMs
                     const availableVMs = data.workspaces.filter(vm => !vm.in_use).length;
                     const inUseVMs = data.workspaces.filter(vm => vm.in_use).length;
-
-                    // Create a modal to show all VMs
-                    const modalHtml = `
-                        <div id="vmListModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-                            <div class="relative top-20 mx-auto p-5 border w-4/5 shadow-lg rounded-md bg-white">
-                                <div class="mt-3">
-                                    <div class="flex justify-between items-center mb-6">
-                                        <h3 class="text-lg font-medium text-gray-900">VM List - ${poolName}</h3>
-                                        <button onclick="document.getElementById('vmListModal').remove()" class="text-gray-400 hover:text-gray-500">
-                                            <span class="sr-only">Close</span>
-                                            <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                                            </svg>
-                                        </button>
-                                    </div>
-
-                                    <!-- VM Statistics -->
-                                    <div class="grid grid-cols-3 gap-4 mb-6">
-                                        <div class="bg-blue-50 p-4 rounded-lg">
-                                            <div class="text-sm text-blue-600">Total VMs</div>
-                                            <div class="text-2xl font-semibold">${data.workspaces.length}</div>
-                                        </div>
-                                        <div class="bg-green-50 p-4 rounded-lg">
-                                            <div class="text-sm text-green-600">Available VMs</div>
-                                            <div class="text-2xl font-semibold">${availableVMs}</div>
-                                        </div>
-                                        <div class="bg-yellow-50 p-4 rounded-lg">
-                                            <div class="text-sm text-yellow-600">In Use VMs</div>
-                                            <div class="text-2xl font-semibold">${inUseVMs}</div>
-                                        </div>
-                                    </div>
-
-                                    <div class="overflow-x-auto">
-                                        <table class="min-w-full divide-y divide-gray-200">
-                                            <thead class="bg-gray-50">
-                                                <tr>
-                                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">VM ID</th>
-                                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody class="bg-white divide-y divide-gray-200">
-                                                ${data.workspaces.map(vm => `
-                                                    <tr>
-                                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                                            ${vm.effective_id}
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap">
-                                                            ${(() => {
-                                                                const statusColors = {
-                                                                    'Failed': 'bg-red-100 text-red-800',
-                                                                    'Pending': 'bg-yellow-100 text-yellow-800',
-                                                                    'In Use': 'bg-blue-100 text-blue-800',
-                                                                    'Available': 'bg-green-100 text-green-800'
-                                                                };
-                                                                const color = statusColors[vm.status] || statusColors['Available'];
-                                                                return `<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${color}">${vm.status}</span>`;
-                                                            })()}
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap text-sm">
-                                                            ${vm.in_use ?
-                                                                `<button onclick="releaseVM('${poolName}', '${vm.effective_id}')" 
-                                                                    class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
-                                                                    Release VM
-                                                                </button>` :
-                                                                `<button onclick="markVMAsUsed('${poolName}', '${vm.effective_id}')"
-                                                                    class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                                                                    ${vm.status === 'Failed' || vm.status === 'Pending' ? 'disabled' : ''}>
-                                                                    Use VM
-                                                                </button>`
-                                                            }
-                                                        </td>
-                                                    </tr>
-                                                `).join('')}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
                     
-                    // Remove any existing modal first
-                    const existingModal = document.getElementById('vmListModal');
-                    if (existingModal) {
-                        existingModal.remove();
-                    }
-                    
-                    // Add modal to body
-                    document.body.insertAdjacentHTML('beforeend', modalHtml);
-                    
-                    // Setup a refresh timer for the VM list
-                    const modalTimer = setInterval(async () => {
-                        try {
-                            const updatedResponse = await authenticatedFetch(`${API_BASE_URL}/pools/${encodeURIComponent(poolName)}/workspaces`);
-                            if (!updatedResponse.ok) return;
-                            
-                            const updatedData = await updatedResponse.json();
-                            if (!updatedData || !updatedData.workspaces) return;
-                            
-                            const currentModal = document.getElementById('vmListModal');
-                            if (!currentModal) {
-                                clearInterval(modalTimer);
-                                return;
-                            }
-                            
-                            // Call usePoolVMs again to refresh the content
-                            await usePoolVMs(poolName);
-                        } catch (error) {
-                            console.error('Error refreshing VM list:', error);
-                        }
-                    }, 5000); // Refresh every 5 seconds
+                    // Update the pool information with the VM counts
+                    return {
+                        availableVMs,
+                        inUseVMs,
+                        totalVMs: data.workspaces.length,
+                        workspaces: data.workspaces
+                    };
                 } catch (error) {
-                    console.error('Error loading VMs:', error);
-                    alert('Failed to load VMs. Please try again.');
+                    console.error('Error fetching pool VMs:', error);
+                    throw error;
                 }
             }
+
 
             // Add handle create pool function
             async function handleCreatePool(e) {

@@ -3,6 +3,8 @@ import uuid
 import json
 from threading import Thread
 import time
+import string
+import random
 from kubernetes import client
 from typing import Optional
 from datetime import datetime
@@ -24,7 +26,26 @@ class PoolService:
         self.cleanup_status = CleanupStatus()
         self.monitor_thread = Thread(target=self._monitor_pools, daemon=True)
         self.monitor_thread.start()
-    
+        
+        # Read workspace configuration from ConfigMap
+        try:
+            config_map = self.core_v1.read_namespaced_config_map("workspace-config", "workspace-system")
+            self.workspace_domain = config_map.data.get("workspace-domain", "SUBDOMAIN_REPLACE_ME")
+            logger.info(f"Using workspace domain: {self.workspace_domain}")
+        except Exception as e:
+            logger.error(f"Error reading workspace config: {e}")
+            self.workspace_domain = "SUBDOMAIN_REPLACE_ME"
+
+    def _generate_random_subdomain(self, length=8):
+        """Generate a random subdomain name"""
+        letters = string.ascii_lowercase + string.digits
+        return ''.join(random.choice(letters) for i in range(length))
+
+    def _random_password(self, length=12):
+        """Generate a random password"""
+        chars = string.ascii_letters + string.digits
+        return ''.join(random.choice(chars) for i in range(length))
+
     def create_pool(self, name: str, minimum_vms: int, repo_name: str, 
                    branch_name: str, github_pat: str) -> Optional[Pool]:
         """Create a new pool with the given configuration"""
@@ -297,24 +318,84 @@ class PoolService:
                          github_pat: str, pool_name: str) -> bool:
         """Create a new workspace in Kubernetes"""
         try:
-            # Create namespace
+            # Generate workspace identifiers
+            subdomain = self._generate_random_subdomain()
             namespace = f"workspace-{workspace_id}"
+            fqdn = f"{subdomain}.{self.workspace_domain}"
+            password = self._random_password()
+            
+            # Create namespace
             self.core_v1.create_namespace(
                 client.V1Namespace(
                     metadata=client.V1ObjectMeta(
                         name=namespace,
                         labels={
                             "workspace-id": workspace_id,
-                            "pool-name": pool_name
+                            "pool-name": pool_name,
+                            "app": "workspace"
                         }
                     )
                 )
             )
             
-            # Create other resources (secrets, deployments, etc.)
-            # This would typically call your existing workspace creation logic
-            # For now, we'll just create a simple deployment
+            # Create workspace info ConfigMap
+            workspace_info = {
+                "id": workspace_id,
+                "repo_name": repo_name,
+                "branch_name": branch_name,
+                "subdomain": subdomain,
+                "fqdn": fqdn,
+                "password": password,
+                "pool_name": pool_name
+            }
             
+            info_config_map = client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(
+                    name="workspace-info",
+                    namespace=namespace,
+                    labels={"app": "workspace-info"}
+                ),
+                data={"info": json.dumps(workspace_info)}
+            )
+            self.core_v1.create_namespaced_config_map(namespace, info_config_map)
+            
+            # Create workspace secret
+            secret = client.V1Secret(
+                metadata=client.V1ObjectMeta(
+                    name="workspace-secret",
+                    namespace=namespace,
+                    labels={"app": "workspace"}
+                ),
+                string_data={
+                    "password": password
+                }
+            )
+            if github_pat:
+                secret.string_data["github_token"] = github_pat
+            self.core_v1.create_namespaced_secret(namespace, secret)
+            
+            # Copy wildcard certificate
+            try:
+                wildcard_cert = self.core_v1.read_namespaced_secret(
+                    name="workspace-domain-wildcard-tls", 
+                    namespace="workspace-system"
+                )
+                
+                wildcard_cert_new = client.V1Secret(
+                    metadata=client.V1ObjectMeta(
+                        name="workspace-domain-wildcard-tls",
+                        namespace=namespace,
+                        labels={"app": "workspace"}
+                    ),
+                    data=wildcard_cert.data,
+                    type=wildcard_cert.type
+                )
+                self.core_v1.create_namespaced_secret(namespace, wildcard_cert_new)
+            except Exception as e:
+                logger.error(f"Error copying wildcard certificate: {e}")
+                # Continue anyway, SSL might not work
+            
+            # Create the deployment
             deployment = client.V1Deployment(
                 metadata=client.V1ObjectMeta(
                     name="workspace",
@@ -342,6 +423,16 @@ class PoolService:
                                         client.V1EnvVar(
                                             name="GITHUB_BRANCH",
                                             value=branch_name
+                                        ),
+                                        client.V1EnvVar(
+                                            name="PASSWORD",
+                                            value=password
+                                        )
+                                    ],
+                                    ports=[
+                                        client.V1ContainerPort(
+                                            container_port=8443,
+                                            name="code-server"
                                         )
                                     ]
                                 )
@@ -351,10 +442,71 @@ class PoolService:
                 )
             )
             
-            self.apps_v1.create_namespaced_deployment(
-                namespace=namespace,
-                body=deployment
+            self.apps_v1.create_namespaced_deployment(namespace, deployment)
+            
+            # Create service
+            service = client.V1Service(
+                metadata=client.V1ObjectMeta(
+                    name="code-server",
+                    namespace=namespace
+                ),
+                spec=client.V1ServiceSpec(
+                    ports=[
+                        client.V1ServicePort(
+                            port=8443,
+                            target_port=8443,
+                            name="code-server"
+                        )
+                    ],
+                    selector={"app": "workspace"}
+                )
             )
+            self.core_v1.create_namespaced_service(namespace, service)
+            
+            # Create ingress
+            ingress = client.V1Ingress(
+                metadata=client.V1ObjectMeta(
+                    name="code-server",
+                    namespace=namespace,
+                    annotations={
+                        "kubernetes.io/ingress.class": "nginx",
+                        "nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+                        "nginx.ingress.kubernetes.io/proxy-send-timeout": "3600"
+                    }
+                ),
+                spec=client.V1IngressSpec(
+                    tls=[
+                        client.V1IngressTLS(
+                            hosts=[f"*.{self.workspace_domain}"],
+                            secret_name="workspace-domain-wildcard-tls"
+                        )
+                    ],
+                    rules=[
+                        client.V1IngressRule(
+                            host=fqdn,
+                            http=client.V1HTTPIngressRuleValue(
+                                paths=[
+                                    client.V1HTTPIngressPath(
+                                        path="/",
+                                        path_type="Prefix",
+                                        backend=client.V1IngressBackend(
+                                            service=client.V1IngressServiceBackend(
+                                                name="code-server",
+                                                port=client.V1ServiceBackendPort(
+                                                    number=8443
+                                                )
+                                            )
+                                        )
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                )
+            )
+            
+            networking_v1 = client.NetworkingV1Api()
+            networking_v1.create_namespaced_ingress(namespace, ingress)
             
             return True
             
@@ -627,6 +779,18 @@ class PoolService:
                 # Get workspace details
                 try:
                     ns_name = f"workspace-{workspace_id}"
+                    
+                    # Get workspace info from ConfigMap
+                    try:
+                        info_config_map = self.core_v1.read_namespaced_config_map(
+                            name="workspace-info",
+                            namespace=ns_name
+                        )
+                        workspace_info = json.loads(info_config_map.data["info"])
+                    except Exception as e:
+                        logger.warning(f"Could not read workspace info for {workspace_id}: {e}")
+                        workspace_info = {}
+                    
                     deployment = self.apps_v1.read_namespaced_deployment_status(
                         name="workspace",
                         namespace=ns_name
@@ -637,7 +801,10 @@ class PoolService:
                         'status': deployment.status.conditions[-1].message if deployment.status.conditions else None,
                         'ready_replicas': deployment.status.ready_replicas,
                         'namespace': ns_name,
-                        'pool_name': pool_name
+                        'pool_name': pool_name,
+                        'subdomain': workspace_info.get('subdomain'),
+                        'fqdn': workspace_info.get('fqdn'),
+                        'password': workspace_info.get('password')
                     })
                 except Exception as e:
                     logger.error(f"Error getting workspace {workspace_id} details: {e}")
@@ -682,8 +849,20 @@ class PoolService:
                 # Get workspace details
                 try:
                     ns_name = f"workspace-{workspace_id}"
+                    
+                    # Get workspace info from ConfigMap
+                    try:
+                        info_config_map = self.core_v1.read_namespaced_config_map(
+                            name="workspace-info",
+                            namespace=ns_name
+                        )
+                        workspace_info = json.loads(info_config_map.data["info"])
+                    except Exception as e:
+                        logger.warning(f"Could not read workspace info for {workspace_id}: {e}")
+                        workspace_info = {}
+                    
                     deployment = self.apps_v1.read_namespaced_deployment_status(
-                        name="workspace",  # Changed from code-server to workspace to match _create_workspace
+                        name="workspace",
                         namespace=ns_name
                     )
                     
@@ -697,6 +876,7 @@ class PoolService:
                         else:
                             status = "pending"
                     
+                    # Include subdomain and FQDN info from workspace_info
                     workspaces.append({
                         'id': workspace_id,
                         'status': status,
@@ -707,7 +887,10 @@ class PoolService:
                         'conditions': [
                             {'type': c.type, 'status': c.status, 'message': c.message}
                             for c in (deployment.status.conditions or [])
-                        ]
+                        ],
+                        'subdomain': workspace_info.get('subdomain'),
+                        'fqdn': workspace_info.get('fqdn'),
+                        'password': workspace_info.get('password')
                     })
                 except Exception as e:
                     logger.error(f"Error getting workspace {workspace_id} details: {e}")

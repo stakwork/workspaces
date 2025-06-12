@@ -118,7 +118,7 @@ data:
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">VM ID</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ready Replicas</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Namespace</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access URL</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Used</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
@@ -129,14 +129,180 @@ data:
             </div>
         </div>
       <script>
+        // Auth class for handling authentication
+        class Auth {
+            static getToken() {
+                return localStorage.getItem('workspace_auth_token');
+            }
+            
+            static setToken(token) {
+                localStorage.setItem('workspace_auth_token', token);
+            }
+            
+            static removeToken() {
+                localStorage.removeItem('workspace_auth_token');
+                localStorage.removeItem('workspace_user_info');
+            }
+            
+            static isAuthenticated() {
+                const token = this.getToken();
+                if (!token) return false;
+                
+                try {
+                    // Simple JWT expiration check
+                    const payload = JSON.parse(atob(token.split('.')[1]));
+                    return payload.exp * 1000 > Date.now();
+                } catch (e) {
+                    return false;
+                }
+            }
+            
+            static getAuthHeaders() {
+                const token = this.getToken();
+                return token ? { 'Authorization': `Bearer ${token}` } : {};
+            }
+        }
+
+        // Add showLoginModal function
+        function showLoginModal() {
+            // Create login modal if it doesn't exist
+            let loginModal = document.getElementById('loginModal');
+            if (!loginModal) {
+                loginModal = document.createElement('div');
+                loginModal.id = 'loginModal';
+                loginModal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center';
+                loginModal.innerHTML = `
+                    <div class="bg-white p-8 rounded-lg shadow-lg w-96">
+                        <h2 class="text-2xl font-bold mb-4">Login Required</h2>
+                        <form id="loginForm" class="space-y-4">
+                            <div>
+                                <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
+                                <input type="text" id="username" name="username" required
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                                <input type="password" id="password" name="password" required
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            </div>
+                            <div id="loginError" class="text-red-600 text-sm hidden"></div>
+                            <button type="submit"
+                                class="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                                Login
+                            </button>
+                        </form>
+                    </div>
+                `;
+                document.body.appendChild(loginModal);
+                
+                // Add login form handler
+                document.getElementById('loginForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const username = document.getElementById('username').value;
+                    const password = document.getElementById('password').value;
+                    const loginError = document.getElementById('loginError');
+                    
+                    try {
+                        const response = await fetch('/api/auth/login', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ username, password })
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (response.ok) {
+                            Auth.setToken(data.token);
+                            loginModal.remove();
+                            // Reload data after successful login
+                            fetchPools();
+                        } else {
+                            loginError.textContent = data.error || 'Login failed';
+                            loginError.classList.remove('hidden');
+                        }
+                    } catch (error) {
+                        console.error('Login error:', error);
+                        loginError.textContent = 'Login failed. Please try again.';
+                        loginError.classList.remove('hidden');
+                    }
+                });
+            }
+            
+            loginModal.classList.remove('hidden');
+        }
+
         const poolSelect = document.getElementById('poolSelect');
         const currentPoolSpan = document.getElementById('currentPool');
         const vmsTableBody = document.querySelector('#vmsTable tbody');
         const refreshPoolsBtn = document.getElementById('refreshPools');
+        
+        // Workspace domain configuration
+        const WORKSPACE_DOMAIN = 'workspaces.turiz.space'; // This should match your configuration
+
+        // Function to construct workspace URL
+        function getWorkspaceUrl(vm) {
+          if (!vm.fqdn) return null;
+          return `https://${vm.fqdn}`;
+        }
+
+        // Function to construct workspace access details
+        function getWorkspaceAccess(vm) {
+          const url = getWorkspaceUrl(vm);
+          if (!url) return '-';
+
+          return `
+            <div>
+              <a href="${url}" target="_blank" class="text-blue-600 hover:underline flex items-center">
+                <span class="mr-2">${vm.fqdn}</span>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+              ${vm.password ? 
+                `<div class="text-xs text-gray-500 mt-1">
+                  Password: <code class="bg-gray-100 px-1 rounded select-all">${vm.password}</code>
+                 </div>` 
+                : ''
+              }
+              ${vm.ports ? 
+                `<div class="text-xs text-gray-500 mt-1">
+                  Ports: ${vm.ports.map(port => 
+                    `<a href="https://${vm.fqdn.split('.')[0]}-${port}.${WORKSPACE_DOMAIN}" target="_blank" 
+                       class="text-blue-600 hover:underline">${port}</a>`
+                  ).join(', ')}
+                 </div>`
+                : ''
+              }`;
+        }
+
+        async function authenticatedFetch(url, options = {}) {
+                const authHeaders = Auth.getAuthHeaders();
+                
+                const config = {
+                    ...options,
+                    headers: {
+                        ...authHeaders,
+                        ...options.headers
+                    }
+                };
+                
+                const response = await fetch(url, config);
+                
+                // Handle 401 Unauthorized
+                if (response.status === 401) {
+                    Auth.removeToken();
+                    showLoginModal();
+                    throw new Error('Authentication required');
+                }
+                
+                return response;
+            }
 
         async function fetchPools() {
           try {
-            const res = await fetch('/api/pools');
+            const res = await authenticatedFetch('/api/pools');
             if (!res.ok) throw new Error('Failed to fetch pools');
             const data = await res.json();
             poolSelect.innerHTML = '';
@@ -163,12 +329,28 @@ data:
         async function loadAvailableVMs(poolName) {
           if (!poolName) return;
           
+          // Initialize map to track existing rows
+          let existingRows;
+          
           currentPoolSpan.textContent = poolName;
-          vmsTableBody.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
+          // Add updating indicator to the table header
+          const tableContainer = document.querySelector('#vmsTable');
+          const updateIndicator = document.createElement('div');
+          updateIndicator.className = 'absolute right-0 top-0 m-4 flex items-center space-x-2';
+          updateIndicator.id = 'update-indicator';
+          updateIndicator.innerHTML = `
+            <svg class="animate-spin h-4 w-4 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span class="text-sm text-blue-600">Updating...</span>
+          `;
+          tableContainer.style.position = 'relative';
+          tableContainer.appendChild(updateIndicator);
           
           try {
             // Get all VMs in the pool using the correct endpoint
-            const res = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces`);
+            const res = await authenticatedFetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces`);
             
             if (!res.ok) {
               throw new Error(`Failed to fetch pool VMs: ${res.status} ${res.statusText}`);
@@ -219,14 +401,30 @@ data:
             const availableVMs = validWorkspaces.filter(vm => !vm.in_use).length;
             const inUseVMs = validWorkspaces.filter(vm => vm.in_use).length;
             
+            // Update stats
             document.getElementById('totalVMs').textContent = totalVMs;
             document.getElementById('availableVMs').textContent = availableVMs;
             document.getElementById('inUseVMs').textContent = inUseVMs;
             
-            vmsTableBody.innerHTML = '';
+            // Create a map of existing rows by workspace ID
+            existingRows = new Map();
+            Array.from(vmsTableBody.children).forEach(row => {
+              const id = row.querySelector('td')?.textContent;
+              if (id) existingRows.set(id, row);
+            });
+            
+            // Handle empty state
             if (data.workspaces.length === 0) {
-              vmsTableBody.innerHTML = '<tr><td colspan="6">No VMs found in this pool</td></tr>';
+              vmsTableBody.innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-gray-500">No VMs found in this pool</td></tr>';
               return;
+            } else {
+              // Clear existing "No VMs" message if it exists
+              if (vmsTableBody.children.length === 1 && vmsTableBody.children[0].children.length === 1) {
+                const cell = vmsTableBody.children[0].children[0];
+                if (cell.colSpan === 6 && cell.textContent.includes('No VMs')) {
+                  vmsTableBody.innerHTML = '';
+                }
+              }
             }
             
             data.workspaces.forEach(vm => {
@@ -236,7 +434,7 @@ data:
               const statusColor = 
                 status === 'Failed' ? 'bg-red-100 text-red-800' :
                 status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
-                status === 'In Use' ? 'bg-blue-100 text-blue-800' :
+                isUsed ? 'bg-blue-100 text-blue-800' :
                 'bg-green-100 text-green-800';
               
               // Use either workspace_id or id, they're both valid identifiers
@@ -246,35 +444,67 @@ data:
                 return;
               }
 
-              tr.innerHTML = `
+              const newContent = `
                 <td class="px-6 py-4 whitespace-nowrap">${workspaceId}</td>
                 <td class="px-6 py-4 whitespace-nowrap">
                   <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColor}">
-                    ${status}
+                    ${isUsed ? 'In Use' : status}
                   </span>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">${vm.ready_replicas ?? '-'}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${vm.namespace ?? '-'}</td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                  ${getWorkspaceAccess(vm)}
+                </td>
                 <td class="px-6 py-4 whitespace-nowrap">${vm.last_used ? new Date(vm.last_used).toLocaleString() : 'Never'}</td>
                 <td class="px-6 py-4 whitespace-nowrap space-x-2">
                   ${isUsed ? 
                     `<button onclick="releaseVM('${poolName}', '${workspaceId}')" 
-                      class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
-                      Release VM
+                      class="inline-flex items-center bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
+                      <span id="release-text-${workspaceId}">Release VM</span>
                     </button>` 
                     :
                     `<button onclick="markUsed('${poolName}', '${workspaceId}')" 
-                      class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm transition duration-200"
+                      class="inline-flex items-center bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm transition duration-200"
                       ${status === 'Failed' || status === 'Pending' ? 'disabled' : ''}>
-                      Use VM
+                      <span id="use-text-${workspaceId}">Use VM</span>
                     </button>`
                   }
                 </td>
               `;
-              vmsTableBody.appendChild(tr);
+              
+              // Update existing row or create new one
+              const existingRow = existingRows.get(workspaceId);
+              if (existingRow) {
+                // Update existing row if it changed
+                if (existingRow.innerHTML !== newContent) {
+                  existingRow.innerHTML = newContent;
+                }
+                existingRows.delete(workspaceId); // Mark as processed
+              } else {
+                // Create new row
+                tr.innerHTML = newContent;
+                vmsTableBody.appendChild(tr);
+              }
             });
-          } catch (err) {
-            vmsTableBody.innerHTML = `<tr><td colspan="6">Error: ${err.message}</td></tr>`;
+          } catch (error) {
+            console.error('Error loading VMs:', error);
+            vmsTableBody.innerHTML = `<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">Error: ${error.message}</td></tr>`;
+            throw error; // Re-throw to handle in finally block
+          } finally {
+            // Remove update indicator
+            const updateIndicator = document.getElementById('update-indicator');
+            if (updateIndicator) {
+              updateIndicator.remove();
+            }
+
+            // Only clean up old rows if no error occurred and we have rows to clean
+            if (existingRows?.size > 0) {
+              try {
+                existingRows.forEach(row => row.remove());
+              } catch (e) {
+                console.error('Error cleaning up old rows:', e);
+              }
+            }
           }
         }
 
@@ -289,18 +519,46 @@ data:
 
             // Show loading state
             const button = document.querySelector(`button[onclick="markUsed('${poolName}', '${vmId}')"]`);
-            if (button) {
+            const textSpan = document.getElementById(`use-text-${vmId}`);
+            if (button && textSpan) {
               button.disabled = true;
-              button.textContent = 'Marking as used...';
+              button.className = 'inline-flex items-center bg-gray-400 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+              textSpan.innerHTML = `
+                <svg class="animate-spin -ml-1 mr-2 h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Activating...
+              `;
             }
 
-            const res = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces/${encodeURIComponent(vmId)}/use`, {
-              method: 'POST',
+            const res = await authenticatedFetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces/${encodeURIComponent(vmId)}/use`, {
+              method: 'POST'
             });
             
-            const data = await res.json();
+            let data;
+            try {
+              data = await res.json();
+            } catch (e) {
+              if (!res.ok) {
+                throw new Error(`Failed to mark VM as used: ${res.status} ${res.statusText}`);
+              }
+              console.warn('Response was not JSON but status was OK');
+            }
+            
             if (!res.ok) {
-              throw new Error(data.error || 'Failed to mark VM as used');
+              throw new Error(data?.error || `Failed to mark VM as used: ${res.status} ${res.statusText}`);
+            }
+            
+            // Show temporary success state
+            if (button && textSpan) {
+              button.className = 'inline-flex items-center bg-blue-500 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+              textSpan.innerHTML = `
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                In Use
+              `;
             }
             
             // Immediately refresh to show changes
@@ -308,19 +566,22 @@ data:
             
             // Set up a quick refresh sequence to catch any delayed state changes
             const refreshTimes = [1000, 2000, 5000]; // Refresh after 1s, 2s, and 5s
-            refreshTimes.forEach(delay => {
-              setTimeout(() => refreshWithDebounce(true), delay);
-            });
+            for (const delay of refreshTimes) {
+              await new Promise(resolve => setTimeout(resolve, delay));
+              await refreshWithDebounce(true);
+            }
             
-          } catch (err) {
-            console.error('Error marking VM as used:', err);
-            alert(`Error: ${err.message}`);
+          } catch (error) {
+            console.error('Error marking VM as used:', error);
+            alert(`Error: ${error.message}`);
             
             // Reset button state on error
             const button = document.querySelector(`button[onclick="markUsed('${poolName}', '${vmId}')"]`);
-            if (button) {
+            const textSpan = document.getElementById(`use-text-${vmId}`);
+            if (button && textSpan) {
               button.disabled = false;
-              button.textContent = 'Use VM';
+              button.className = 'inline-flex items-center bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+              textSpan.textContent = 'Use VM';
             }
           }
         }
@@ -336,18 +597,46 @@ data:
 
             // Show loading state
             const button = document.querySelector(`button[onclick="releaseVM('${poolName}', '${vmId}')"]`);
-            if (button) {
+            const textSpan = document.getElementById(`release-text-${vmId}`);
+            if (button && textSpan) {
               button.disabled = true;
-              button.textContent = 'Releasing...';
+              button.className = 'inline-flex items-center bg-gray-400 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+              textSpan.innerHTML = `
+                <svg class="animate-spin -ml-1 mr-2 h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Releasing...
+              `;
             }
 
-            const res = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces/${encodeURIComponent(vmId)}/release`, {
-              method: 'POST',
+            const res = await authenticatedFetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces/${encodeURIComponent(vmId)}/release`, {
+              method: 'POST'
             });
             
-            const data = await res.json();
+            let data;
+            try {
+              data = await res.json();
+            } catch (e) {
+              if (!res.ok) {
+                throw new Error(`Failed to release VM: ${res.status} ${res.statusText}`);
+              }
+              console.warn('Response was not JSON but status was OK');
+            }
+            
             if (!res.ok) {
-              throw new Error(data.error || 'Failed to release VM');
+              throw new Error(data?.error || 'Failed to release VM');
+            }
+            
+            // Show temporary success state
+            if (button && textSpan) {
+              button.className = 'inline-flex items-center bg-green-500 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+              textSpan.innerHTML = `
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                Released
+              `;
             }
             
             // Immediately refresh to show changes
@@ -355,19 +644,22 @@ data:
             
             // Set up a quick refresh sequence to catch any delayed state changes
             const refreshTimes = [1000, 2000, 5000]; // Refresh after 1s, 2s, and 5s
-            refreshTimes.forEach(delay => {
-              setTimeout(() => refreshWithDebounce(true), delay);
-            });
+            for (const delay of refreshTimes) {
+              await new Promise(resolve => setTimeout(resolve, delay));
+              await refreshWithDebounce(true);
+            }
             
-          } catch (err) {
-            console.error('Error releasing VM:', err);
-            alert(`Error: ${err.message}`);
+          } catch (error) {
+            console.error('Error releasing VM:', error);
+            alert(`Error: ${error.message}`);
             
             // Reset button state on error
             const button = document.querySelector(`button[onclick="releaseVM('${poolName}', '${vmId}')"]`);
-            if (button) {
+            const textSpan = document.getElementById(`release-text-${vmId}`);
+            if (button && textSpan) {
               button.disabled = false;
-              button.textContent = 'Release VM';
+              button.className = 'inline-flex items-center bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+              textSpan.textContent = 'Release VM';
             }
           }
         }
@@ -428,13 +720,33 @@ data:
         }
 
         // Auto-refresh settings
-        const REFRESH_INTERVAL = 15000; // 15 seconds
-        setInterval(() => refreshWithDebounce(true), REFRESH_INTERVAL);
-
-        // Set up visibility change handler to refresh when tab becomes visible
+        const REFRESH_INTERVAL = 30000; // 30 seconds
+        let refreshTimer = null;
+        
+        function startAutoRefresh() {
+          if (refreshTimer) {
+            clearInterval(refreshTimer);
+          }
+          refreshTimer = setInterval(() => refreshWithDebounce(true), REFRESH_INTERVAL);
+        }
+        
+        function stopAutoRefresh() {
+          if (refreshTimer) {
+            clearInterval(refreshTimer);
+            refreshTimer = null;
+          }
+        }
+        
+        // Start auto-refresh initially
+        startAutoRefresh();
+        
+        // Set up visibility change handler to pause/resume refresh when tab becomes hidden/visible
         document.addEventListener('visibilitychange', () => {
           if (document.visibilityState === 'visible') {
             refreshWithDebounce(true);
+            startAutoRefresh();
+          } else {
+            stopAutoRefresh();
           }
         });
 
@@ -470,7 +782,7 @@ data:
             }
             
             try {
-              const response = await fetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces`, {
+              const response = await authenticatedFetch(`/api/pools/${encodeURIComponent(poolName)}/workspaces`, {
                 headers: {
                   'Cache-Control': 'no-cache',
                   'Pragma': 'no-cache'
