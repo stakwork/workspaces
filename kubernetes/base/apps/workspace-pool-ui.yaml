@@ -51,7 +51,7 @@ data:
 
         # Support for SPA routing
         location / {
-            try_files $uri $uri/ /index.html;
+            try_files  / /index.html;
         }
 
         # Serve configuration file
@@ -159,7 +159,12 @@ data:
             
             static getAuthHeaders() {
                 const token = this.getToken();
-                return token ? { 'Authorization': `Bearer ${token}` } : {};
+                return token ? { 
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                } : {
+                    'Content-Type': 'application/json'
+                };
             }
         }
 
@@ -213,11 +218,28 @@ data:
                         
                         const data = await response.json();
                         
-                        if (response.ok) {
-                            Auth.setToken(data.token);
-                            loginModal.remove();
-                            // Reload data after successful login
-                            fetchPools();
+                        if (response.ok && data.token) {
+                            // Validate token before storing
+                            try {
+                                const payload = JSON.parse(atob(data.token.split('.')[1]));
+                                if (payload.exp * 1000 <= Date.now()) {
+                                    throw new Error('Token is expired');
+                                }
+                                Auth.setToken(data.token);
+                                if (data.user) {
+                                    Auth.setUserInfo(data.user);
+                                }
+                                loginModal.remove();
+                                // Wait a moment before reloading data
+                                setTimeout(() => {
+                                    fetchPools();
+                                }, 100);
+                            } catch (e) {
+                                console.error('Token validation failed:', e);
+                                loginError.textContent = 'Invalid authentication token';
+                                loginError.classList.remove('hidden');
+                                return;
+                            }
                         } else {
                             loginError.textContent = data.error || 'Login failed';
                             loginError.classList.remove('hidden');
@@ -239,7 +261,7 @@ data:
         const refreshPoolsBtn = document.getElementById('refreshPools');
         
         // Workspace domain configuration
-        const WORKSPACE_DOMAIN = '${SUBDOMAIN_REPLACE_ME}'; // This should match your configuration
+        const WORKSPACE_DOMAIN = '${SUBDOMAIN_REPLACE._E}'; // This should match your configuration
 
         // Function to construct workspace URL
         function getWorkspaceUrl(vm) {
@@ -254,7 +276,7 @@ data:
 
           return `
             <div>
-              <a href="${url}" target="_blank" class="text-blue-600 hover:underline flex items-center">
+              <a href="" target="_blank" class="text-blue-600 hover:underline flex items-center">
                 <span class="mr-2">${vm.fqdn}</span>
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -269,8 +291,8 @@ data:
               ${vm.ports ? 
                 `<div class="text-xs text-gray-500 mt-1">
                   Ports: ${vm.ports.map(port => 
-                    `<a href="https://${vm.fqdn.split('.')[0]}-${port}.${WORKSPACE_DOMAIN}" target="_blank" 
-                       class="text-blue-600 hover:underline">${port}</a>`
+                    `<a href="https://${vm.fqdn.split('.')[0]}-." target="_blank" 
+                       class="text-blue-600 hover:underline"></a>`
                   ).join(', ')}
                  </div>`
                 : ''
@@ -290,8 +312,8 @@ data:
                 
                 const response = await fetch(url, config);
                 
-                // Handle 401 Unauthorized
-                if (response.status === 401) {
+                // Handle 401 Unauthorized and 403 Forbidden
+                if (response.status === 401 || response.status === 403) {
                     Auth.removeToken();
                     showLoginModal();
                     throw new Error('Authentication required');
@@ -445,9 +467,9 @@ data:
               }
 
               const newContent = `
-                <td class="px-6 py-4 whitespace-nowrap">${workspaceId}</td>
+                <td class="px-6 py-4 whitespace-nowrap"></td>
                 <td class="px-6 py-4 whitespace-nowrap">
-                  <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColor}">
+                  <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ">
                     ${isUsed ? 'In Use' : status}
                   </span>
                 </td>
@@ -458,15 +480,15 @@ data:
                 <td class="px-6 py-4 whitespace-nowrap">${vm.last_used ? new Date(vm.last_used).toLocaleString() : 'Never'}</td>
                 <td class="px-6 py-4 whitespace-nowrap space-x-2">
                   ${isUsed ? 
-                    `<button onclick="releaseVM('${poolName}', '${workspaceId}')" 
+                    `<button onclick="releaseVM('', '')" 
                       class="inline-flex items-center bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
-                      <span id="release-text-${workspaceId}">Release VM</span>
+                      <span id="release-text-">Release VM</span>
                     </button>` 
                     :
-                    `<button onclick="markUsed('${poolName}', '${workspaceId}')" 
+                    `<button onclick="markUsed('', '')" 
                       class="inline-flex items-center bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm transition duration-200"
                       ${status === 'Failed' || status === 'Pending' ? 'disabled' : ''}>
-                      <span id="use-text-${workspaceId}">Use VM</span>
+                      <span id="use-text-">Use VM</span>
                     </button>`
                   }
                 </td>
@@ -518,8 +540,8 @@ data:
             }
 
             // Show loading state
-            const button = document.querySelector(`button[onclick="markUsed('${poolName}', '${vmId}')"]`);
-            const textSpan = document.getElementById(`use-text-${vmId}`);
+            const button = document.querySelector(`button[onclick="markUsed('', '')"]`);
+            const textSpan = document.getElementById(`use-text-`);
             if (button && textSpan) {
               button.disabled = true;
               button.className = 'inline-flex items-center bg-gray-400 text-white px-3 py-1 rounded-md text-sm transition duration-200';
@@ -576,8 +598,8 @@ data:
             alert(`Error: ${error.message}`);
             
             // Reset button state on error
-            const button = document.querySelector(`button[onclick="markUsed('${poolName}', '${vmId}')"]`);
-            const textSpan = document.getElementById(`use-text-${vmId}`);
+            const button = document.querySelector(`button[onclick="markUsed('', '')"]`);
+            const textSpan = document.getElementById(`use-text-`);
             if (button && textSpan) {
               button.disabled = false;
               button.className = 'inline-flex items-center bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm transition duration-200';
@@ -596,8 +618,8 @@ data:
             }
 
             // Show loading state
-            const button = document.querySelector(`button[onclick="releaseVM('${poolName}', '${vmId}')"]`);
-            const textSpan = document.getElementById(`release-text-${vmId}`);
+            const button = document.querySelector(`button[onclick="releaseVM('', '')"]`);
+            const textSpan = document.getElementById(`release-text-`);
             if (button && textSpan) {
               button.disabled = true;
               button.className = 'inline-flex items-center bg-gray-400 text-white px-3 py-1 rounded-md text-sm transition duration-200';
@@ -654,8 +676,8 @@ data:
             alert(`Error: ${error.message}`);
             
             // Reset button state on error
-            const button = document.querySelector(`button[onclick="releaseVM('${poolName}', '${vmId}')"]`);
-            const textSpan = document.getElementById(`release-text-${vmId}`);
+            const button = document.querySelector(`button[onclick="releaseVM('', '')"]`);
+            const textSpan = document.getElementById(`release-text-`);
             if (button && textSpan) {
               button.disabled = false;
               button.className = 'inline-flex items-center bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200';
@@ -685,6 +707,12 @@ data:
 
         // Function to refresh with debouncing
         async function refreshWithDebounce(force = false) {
+          // Check authentication first
+          if (!Auth.isAuthenticated()) {
+              showLoginModal();
+              return;
+          }
+          
           const now = Date.now();
           const timeSinceLastRefresh = now - lastRefreshTime;
 
@@ -797,7 +825,7 @@ data:
                   console.debug('Pool not found, will retry');
                   return;
                 }
-                throw new Error(`HTTP ${status} ${response.statusText}`);
+                throw new Error(`HTTP  ${response.statusText}`);
               }
               
               const data = await response.json();
@@ -841,7 +869,7 @@ data:
                   <tr>
                     <td colspan="6" class="text-red-500">
                       Error checking pool status: ${error.message}<br>
-                      <button onclick="retryPoolUpdates('${poolName}')" class="text-blue-500 underline mt-2">
+                      <button onclick="retryPoolUpdates('')" class="text-blue-500 underline mt-2">
                         Click to retry
                       </button>
                     </td>
