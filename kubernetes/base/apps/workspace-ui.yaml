@@ -47,8 +47,6 @@ data:
             <div class="flex justify-between items-center mb-6">
                 <div class="flex items-center space-x-6">
                     <h1 class="text-3xl font-bold">Workspace Manager</h1>
-                    <button id="navWorkspaces" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition-colors">Workspaces</button>
-                    <button id="navPools" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition-colors">Pools</button>
                 </div>
                 <div class="flex items-center space-x-4">
                     <span id="userInfo" class="text-gray-600"></span>
@@ -57,110 +55,109 @@ data:
                     </button>
                 </div>
             </div>
-            <!-- SPA Content Switcher -->
-            <div id="spaWorkspacesSection">
-                <!-- Create Workspace Form -->
-                <div class="bg-white p-6 rounded-lg shadow-md mb-8">
-                    <h2 class="text-xl font-semibold mb-4">Create New Workspace</h2>
-                    <form id="createWorkspaceForm">
-                        <!-- Repository Inputs -->
-                        <div class="mb-6">
-                            <h3 class="text-lg font-medium mb-3">Repositories</h3>
-                            <div id="repoInputs" class="space-y-3 mb-4">
-                                <div class="repo-input">
-                                    <div class="w-full">
-                                        <label for="githubUrl0" class="block text-gray-700 mb-2">GitHub Repository URL</label>
-                                        <input type="text" id="githubUrl0" 
-                                            placeholder="https://github.com/username/repository" 
-                                            class="w-full p-2 border border-gray-300 rounded-md mb-2">
-                                        <label for="githubBranch0" class="block text-gray-700 mb-2">Branch Name (leave empty for default branch)</label>
-                                        <input type="text" id="githubBranch0" 
-                                            placeholder="Leave empty to use default branch" 
-                                            class="w-full p-2 border border-gray-300 rounded-md">
-                                        <p class="text-xs text-gray-500 mt-1">The default branch will be used if left empty</p>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="flex space-x-2 mb-4">
-                                <button type="button" id="addRepoBtn" class="bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300">
-                                    + Add Repository
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <!-- GitHub PAT Input -->
-                        <div class="mb-6">
-                            <h3 class="text-lg font-medium mb-3">GitHub Access Token (Optional)</h3>
-                            <input type="password" id="githubPat" 
-                                placeholder="Personal Access Token for private repos" 
-                                class="w-full p-2 border border-gray-300 rounded-md">
-                            <p class="text-xs text-gray-500 mt-1">
-                                If you want to clone private repositories, enter a GitHub Personal Access Token (PAT) here.<br>
-                                <span class="text-red-500">Do not reuse tokens you use elsewhere. Create a new token with only <b>repo</b> access.</span>
-                            </p>
-                        </div>
-                        
-                        <!-- Custom Image Settings -->
-                        <div class="mb-6">
-                            <h3 class="text-lg font-medium mb-3">Image Configuration</h3>
-                            
-                            <div class="mb-4">
-                                <label class="inline-flex items-center">
-                                    <input type="radio" name="imageConfigType" value="default" checked class="form-radio">
-                                    <span class="ml-2">Use Default Image (linuxserver/code-server:latest)</span>
-                                </label>
-                            </div>
-                            
-                            <div class="mb-4">
-                                <label class="inline-flex items-center">
-                                    <input type="radio" name="imageConfigType" value="custom" class="form-radio">
-                                    <span class="ml-2">Use Custom Image</span>
-                                </label>
-                                
-                                <div id="customImageOptions" class="mt-3 ml-6 hidden">
-                                    <div class="mb-3">
-                                        <label class="inline-flex items-center">
-                                            <input type="radio" name="customImageType" value="dockerImage" checked class="form-radio">
-                                            <span class="ml-2">Specify Docker Image</span>
-                                        </label>
-                                        <div class="mt-2">
-                                            <input type="text" id="customImageName" 
-                                                placeholder="e.g., myorg/code-server:v2" 
-                                                class="w-full p-2 border border-gray-300 rounded-md">
-                                            <p class="text-xs text-gray-500 mt-1">Must be compatible with linuxserver/code-server base image</p>
-                                        </div>
-                                    </div>
-                                    
-                                    <div>
-                                        <label class="inline-flex items-center">
-                                            <input type="radio" name="customImageType" value="imageUrl" class="form-radio">
-                                            <span class="ml-2">Build from URL</span>
-                                        </label>
-                                        <div class="mt-2">
-                                            <input type="text" id="customImageUrl" 
-                                                placeholder="https://github.com/myorg/my-custom-image" 
-                                                class="w-full p-2 border border-gray-300 rounded-md" disabled>
-                                            <p class="text-xs text-gray-500 mt-1">URL to GitHub repository or ZIP file containing Dockerfile</p>
-                                        </div>
-                                    </div>
+            
+            <!-- Create Workspace Form -->
+            <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+                <h2 class="text-xl font-semibold mb-4">Create New Workspace</h2>
+                <form id="createWorkspaceForm">
+                    <!-- Repository Inputs -->
+                    <div class="mb-6">
+                        <h3 class="text-lg font-medium mb-3">Repositories</h3>
+                        <div id="repoInputs" class="space-y-3 mb-4">
+                            <div class="repo-input">
+                                <div class="w-full">
+                                    <label for="githubUrl0" class="block text-gray-700 mb-2">GitHub Repository URL</label>
+                                    <input type="text" id="githubUrl0" 
+                                        placeholder="https://github.com/username/repository" 
+                                        class="w-full p-2 border border-gray-300 rounded-md mb-2">
+                                    <label for="githubBranch0" class="block text-gray-700 mb-2">Branch Name (leave empty for default branch)</label>
+                                    <input type="text" id="githubBranch0" 
+                                        placeholder="Leave empty to use default branch" 
+                                        class="w-full p-2 border border-gray-300 rounded-md">
+                                    <p class="text-xs text-gray-500 mt-1">The default branch will be used if left empty</p>
                                 </div>
                             </div>
                         </div>
-                        
-                        <button type="submit" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600">
-                            Create Workspace
-                        </button>
-                    </form>
-                    <div id="createStatus" class="mt-4 hidden"></div>
-                </div>
-                
-                <!-- Workspaces List -->
-                <div class="bg-white p-6 rounded-lg shadow-md mb-8">
-                    <h2 class="text-xl font-semibold mb-4">Your Workspaces</h2>
-                    <div id="workspacesList" class="space-y-4">
-                        <p class="text-gray-500">Loading workspaces...</p>
+                        <div class="flex space-x-2 mb-4">
+                            <button type="button" id="addRepoBtn" class="bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300">
+                                + Add Repository
+                            </button>
+                        </div>
                     </div>
+                    
+                    <!-- GitHub PAT Input -->
+                    <div class="mb-6">
+                        <h3 class="text-lg font-medium mb-3">GitHub Access Token (Optional)</h3>
+                        <input type="password" id="githubPat" 
+                            placeholder="Personal Access Token for private repos" 
+                            class="w-full p-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">
+                            If you want to clone private repositories, enter a GitHub Personal Access Token (PAT) here.<br>
+                            <span class="text-red-500">Do not reuse tokens you use elsewhere. Create a new token with only <b>repo</b> access.</span>
+                        </p>
+                    </div>
+                    
+                    <!-- Custom Image Settings -->
+                    <div class="mb-6">
+                        <h3 class="text-lg font-medium mb-3">Image Configuration</h3>
+                        
+                        <div class="mb-4">
+                            <label class="inline-flex items-center">
+                                <input type="radio" name="imageConfigType" value="default" checked class="form-radio">
+                                <span class="ml-2">Use Default Image (linuxserver/code-server:latest)</span>
+                            </label>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="inline-flex items-center">
+                                <input type="radio" name="imageConfigType" value="custom" class="form-radio">
+                                <span class="ml-2">Use Custom Image</span>
+                            </label>
+                            
+                            <div id="customImageOptions" class="mt-3 ml-6 hidden">
+                                <div class="mb-3">
+                                    <label class="inline-flex items-center">
+                                        <input type="radio" name="customImageType" value="dockerImage" checked class="form-radio">
+                                        <span class="ml-2">Specify Docker Image</span>
+                                    </label>
+                                    <div class="mt-2">
+                                        <input type="text" id="customImageName" 
+                                            placeholder="e.g., myorg/code-server:v2" 
+                                            class="w-full p-2 border border-gray-300 rounded-md">
+                                        <p class="text-xs text-gray-500 mt-1">Must be compatible with linuxserver/code-server base image</p>
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label class="inline-flex items-center">
+                                        <input type="radio" name="customImageType" value="imageUrl" class="form-radio">
+                                        <span class="ml-2">Build from URL</span>
+                                    </label>
+                                    <div class="mt-2">
+                                        <input type="text" id="customImageUrl" 
+                                            placeholder="https://github.com/myorg/my-custom-image" 
+                                            class="w-full p-2 border border-gray-300 rounded-md" disabled>
+                                        <p class="text-xs text-gray-500 mt-1">URL to GitHub repository or ZIP file containing Dockerfile</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600">
+                        Create Workspace
+                    </button>
+                </form>
+                <div id="createStatus" class="mt-4 hidden"></div>
+            </div>
+            
+            <!-- Workspaces List -->
+            <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+                <h2 class="text-xl font-semibold mb-4">Your Workspaces</h2>
+                <div id="workspacesList" class="space-y-4">
+                    <p class="text-gray-500">Loading workspaces...</p>
                 </div>
+            </div>
 
                 <!-- Create Pool Form -->
                 <div class="bg-white p-6 rounded-lg shadow-md mb-8">
@@ -183,8 +180,16 @@ data:
                                         class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline">
                                     <p class="text-xs text-gray-500 mt-1">The default branch will be used if left empty</p>
                                 </div>
+
+                                <div class="mt-4">
+                                    <label class="inline-flex items-center">
+                                        <input type="checkbox" id="enableRepoCloning" class="form-checkbox">
+                                        <span class="ml-2">Enable Repository Cloning</span>
+                                    </label>
+                                </div>
                             </div>
                         </div>
+
                         <!-- Pool Settings -->
                         <div class="mb-6">
                             <h4 class="text-md font-medium mb-3">Pool Settings</h4>
@@ -204,6 +209,7 @@ data:
                                 </div>
                             </div>
                         </div>
+
                         <!-- GitHub PAT -->
                         <div class="mb-6">
                             <h4 class="text-md font-medium mb-3">GitHub Access Token (Optional)</h4>
@@ -215,6 +221,7 @@ data:
                                 <span class="text-red-500">Do not reuse tokens you use elsewhere. Create a new token with only <b>repo</b> access.</span>
                             </p>
                         </div>
+
                         <div class="mt-4">
                             <button type="submit" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600">
                                 Create Pool
@@ -223,7 +230,7 @@ data:
                     </form>
                     <div id="createPoolStatus" class="mt-4 hidden"></div>
                 </div>
-                
+
                 <!-- Pools List -->
                 <div class="bg-white p-6 rounded-lg shadow-md">
                     <h3 class="text-lg font-medium mb-4">Your Pools</h3>
@@ -231,6 +238,43 @@ data:
                         <p class="text-gray-500">Loading pools...</p>
                     </div>
                 </div>
+
+                <!-- Pool Content (VMs in Pool) -->
+                <div id="poolContent" class="bg-white p-6 rounded-lg shadow-md mb-8 hidden">
+                    <h2 class="text-xl font-semibold mb-4">VMs in Pool: <span id="currentPool" class="text-blue-600">-</span></h2>
+                    <!-- Pool Stats -->
+                    <div class="grid grid-cols-3 gap-4 mb-6">
+                        <div class="bg-blue-50 p-4 rounded-lg">
+                            <h3 class="text-sm font-semibold text-gray-600">Total VMs</h3>
+                            <p id="totalVMs" class="text-2xl font-bold text-blue-600">-</p>
+                        </div>
+                        <div class="bg-green-50 p-4 rounded-lg">
+                            <h3 class="text-sm font-semibold text-gray-600">Available VMs</h3>
+                            <p id="availableVMs" class="text-2xl font-bold text-green-600">-</p>
+                        </div>
+                        <div class="bg-yellow-50 p-4 rounded-lg">
+                            <h3 class="text-sm font-semibold text-gray-600">In Use</h3>
+                            <p id="inUseVMs" class="text-2xl font-bold text-yellow-600">-</p>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table id="vmsTable" class="min-w-full">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">VM ID</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ready Replicas</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access URL</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Used</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200"></tbody>
+                        </table>
+                    </div>
+                    <button onclick="closePoolContent()" class="mt-4 bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Close</button>
+                </div>
+                <!-- End Pool Content -->
             </div>
         </div>
 
@@ -383,36 +427,12 @@ data:
             }
             
             function showMainContent() {
-                const loginModal = document.getElementById('loginModal');
-                const mainContent = document.getElementById('mainContent');
-                const userInfo = document.getElementById('userInfo');
-                const spaWorkspacesSection = document.getElementById('spaWorkspacesSection');
-                const spaPoolsSection = document.getElementById('spaPoolsSection');
-                if (loginModal) loginModal.classList.add('hidden');
-                if (mainContent) mainContent.classList.remove('hidden');
-                if (currentUser && userInfo) {
-                    userInfo.textContent = `Welcome, ${currentUser.username}`;
+                document.getElementById('loginModal').classList.add('hidden');
+                document.getElementById('mainContent').classList.remove('hidden');
+                
+                if (currentUser) {
+                    document.getElementById('userInfo').textContent = `Welcome, ${currentUser.username}`;
                 }
-                if (spaWorkspacesSection) spaWorkspacesSection.classList.remove('hidden');
-                if (spaPoolsSection) spaPoolsSection.classList.add('hidden');
-                // Setup SPA navigation listeners (only once)
-                if (!window._spaNavSetup) {
-                    const navWorkspaces = document.getElementById('navWorkspaces');
-                    const navPools = document.getElementById('navPools');
-                    if (navWorkspaces) navWorkspaces.addEventListener('click', function() {
-                        if (spaWorkspacesSection) spaWorkspacesSection.classList.remove('hidden');
-                        if (spaPoolsSection) spaPoolsSection.classList.add('hidden');
-                        setupPoolManagement(); // Ensure event listeners are attached after navigation
-                    });
-                    if (navPools) navPools.addEventListener('click', function() {
-                        if (spaWorkspacesSection) spaWorkspacesSection.classList.add('hidden');
-                        if (spaPoolsSection) spaPoolsSection.classList.remove('hidden');
-                        if (typeof fetchPools === 'function') fetchPools();
-                        setupPoolManagement(); // Ensure event listeners are attached after navigation
-                    });
-                    window._spaNavSetup = true;
-                }
-                setupPoolManagement(); // Always call to ensure listeners are attached after refresh
             }
             
             async function handleLogin(e) {
@@ -573,9 +593,12 @@ data:
                 try {
                     const response = await authenticatedFetch(`${API_BASE_URL}/workspaces`);
                     const data = await response.json();
+                    
                     const workspacesList = document.getElementById('workspacesList');
+                    
                     if (data.workspaces && data.workspaces.length > 0) {
                         workspacesList.innerHTML = '';
+                        
                         data.workspaces.forEach(workspace => {
                             if (!workspace) return; // Skip if workspace is undefined
                             const workspaceEl = document.createElement('div');
@@ -697,13 +720,13 @@ data:
                             workspacesList.appendChild(workspaceEl);
                         });
                     } else {
-                        workspacesList.innerHTML = '<p class="text-gray-500 text-center font-medium">No workspaces found. Create one to get started.</p>';
+                        workspacesList.innerHTML = '<p class="text-gray-500">No workspaces found. Create one to get started.</p>';
                     }
                 } catch (error) {
                     console.error('Error loading workspaces:', error);
                     if (error.message !== 'Authentication required') {
                         document.getElementById('workspacesList').innerHTML = 
-                            '<p class="text-red-500 text-center">Failed to load workspaces. Please try again later.</p>';
+                            '<p class="text-red-500">Failed to load workspaces. Please try again later.</p>';
                     }
                 }
             }
@@ -991,42 +1014,30 @@ data:
             function setupPoolManagement() {
                 const createPoolForm = document.getElementById('createPoolForm');
                 const editPoolForm = document.getElementById('editPoolForm');
-
-                // Remove previous event listeners if any (by cloning the node)
-                if (createPoolForm) {
-                    const newCreatePoolForm = createPoolForm.cloneNode(true);
-                    createPoolForm.parentNode.replaceChild(newCreatePoolForm, createPoolForm);
-                    newCreatePoolForm.addEventListener('submit', handleCreatePool);
-                }
-                if (editPoolForm) {
-                    const newEditPoolForm = editPoolForm.cloneNode(true);
-                    editPoolForm.parentNode.replaceChild(newEditPoolForm, editPoolForm);
-                    newEditPoolForm.addEventListener('submit', handleEditPool);
-                }
+                
+                createPoolForm.addEventListener('submit', handleCreatePool);
+                editPoolForm.addEventListener('submit', handleEditPool);
+                
                 loadPools();
             }
 
             async function loadPools() {
-                const poolsList = document.getElementById('poolsList');
-                if (!poolsList) return;
                 try {
                     const response = await authenticatedFetch(`${API_BASE_URL}/pools`);
                     const data = await response.json();
+                    const poolsList = document.getElementById('poolsList');
                     if (data.pools && data.pools.length > 0) {
                         poolsList.innerHTML = '';
                         data.pools.forEach(pool => {
                             const poolEl = document.createElement('div');
                             poolEl.className = 'border border-gray-200 rounded-md p-4 mb-4';
-
                             const healthBadge = pool.is_healthy 
                                 ? '<span class="text-xs px-2 py-1 rounded-full bg-green-100 text-green-800">Healthy</span>'
                                 : '<span class="text-xs px-2 py-1 rounded-full bg-red-100 text-red-800">Unhealthy</span>';
-
                             const statusMessage = pool.status_message || 'No status message available';
                             const currentVMs = pool.workspace_count || 0;
                             const targetVMs = pool.minimum_vms || 0;
                             const vmStatusColor = currentVMs >= targetVMs ? 'text-green-600' : 'text-yellow-600';
-
                             poolEl.innerHTML = `
                                 <div class="flex justify-between items-start">
                                     <div class="flex-grow">
@@ -1034,27 +1045,44 @@ data:
                                             <h3 class="text-xl font-semibold">${pool.name}</h3>
                                             ${healthBadge}
                                         </div>
-                                        <div class="mb-2 text-sm text-gray-700">
-                                            <span class="font-medium">Repo:</span> ${pool.repo_name || '-'}
-                                            <span class="ml-4 font-medium">Branch:</span> ${pool.branch_name || '-'}
+                                        <div class="bg-gray-50 p-3 rounded-md mb-3">
+                                            <p class="text-sm">
+                                                <span class="font-medium">Repository:</span> 
+                                                ${pool.repo_name}
+                                            </p>
+                                            <p class="text-sm">
+                                                <span class="font-medium">Branch:</span> 
+                                                ${pool.branch_name || 'default'}
+                                            </p>
+                                            <p class="text-sm mt-2">
+                                                <span class="font-medium">Status:</span> 
+                                                <span class="text-gray-600">${statusMessage}</span>
+                                            </p>
                                         </div>
-                                        <div class="mb-2 text-xs text-gray-500">${statusMessage}</div>
                                         <div class="grid grid-cols-3 gap-4 mb-3">
                                             <div class="bg-white p-3 rounded-lg shadow-sm border">
-                                                <span class="font-medium">Current VMs:</span> <span class="${vmStatusColor}">${currentVMs}</span>
+                                                <h4 class="text-sm font-medium text-gray-500">Current VMs</h4>
+                                                <p class="text-2xl font-bold ${vmStatusColor}">${currentVMs}</p>
                                             </div>
                                             <div class="bg-white p-3 rounded-lg shadow-sm border">
-                                                <span class="font-medium">Target VMs:</span> <span>${targetVMs}</span>
-                                            </div>
-                                            <div class="bg-white p-3 rounded-lg shadow-sm border">
-                                                <span class="font-medium">Pool Type:</span> <span>${pool.type || 'N/A'}</span>
+                                                <h4 class="text-sm font-medium text-gray-500">Target VMs</h4>
+                                                <p class="text-2xl font-bold text-blue-600">${targetVMs}</p>
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="flex flex-col space-y-2 items-end">
-                                        <button onclick="editPool('${pool.name}')" class="bg-blue-500 text-white py-1 px-3 rounded-md text-sm">Edit</button>
-                                        <button onclick="deletePool('${pool.name}')" class="bg-red-500 text-white py-1 px-3 rounded-md text-sm">Delete</button>
-                                        <button onclick="viewPoolVMs('${pool.name}')" class="bg-gray-500 text-white py-1 px-3 rounded-md text-sm">View VMs</button>
+                                    <div class="flex flex-col space-y-2">
+                                        <button onclick="editPool('${pool.name}')" 
+                                            class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
+                                            Edit
+                                        </button>
+                                        <button onclick="deletePool('${pool.name}')" 
+                                            class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
+                                            Delete
+                                        </button>
+                                        <button onclick="showPoolContent('${pool.name}')" 
+                                            class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
+                                            View VMs
+                                        </button>
                                     </div>
                                 </div>
                             `;
@@ -1066,7 +1094,8 @@ data:
                 } catch (error) {
                     console.error('Error loading pools:', error);
                     if (error.message !== 'Authentication required') {
-                        poolsList.innerHTML = '<p class="text-red-500">Failed to load pools. Please try again later.</p>';
+                        document.getElementById('poolsList').innerHTML = 
+                            '<p class="text-red-500">Failed to load pools. Please try again later.</p>';
                     }
                 }
             }
@@ -1195,14 +1224,8 @@ data:
                 const createPoolForm = document.getElementById('createPoolForm');
                 const editPoolForm = document.getElementById('editPoolForm');
                 
-                if (createPoolForm) {
-                    createPoolForm.removeEventListener('submit', handleCreatePool); // Remove if previously attached
-                    createPoolForm.addEventListener('submit', handleCreatePool);
-                }
-                if (editPoolForm) {
-                    editPoolForm.removeEventListener('submit', handleEditPool);
-                    editPoolForm.addEventListener('submit', handleEditPool);
-                }
+                createPoolForm.addEventListener('submit', handleCreatePool);
+                editPoolForm.addEventListener('submit', handleEditPool);
                 
                 loadPools();
             }
@@ -1221,13 +1244,14 @@ data:
                     name: document.getElementById('editPoolName').value.trim(),
                     minimum_vms: minVMs,
                     repo_name: document.getElementById('editRepoName').value.trim(),
-                    branch_name: document.getElementById('editBranchName').value.trim()
+                    branch_name: document.getElementById('editBranchName').value.trim() || null
                 };
 
-                const statusEl = document.getElementById('editPoolStatus');
-                statusEl.className = 'mt-4 p-4 bg-yellow-100 text-yellow-800 rounded-md';
-                statusEl.innerHTML = 'Saving changes...';
-                statusEl.classList.remove('hidden');
+                // Only include github_pat if a new one is provided
+                const newPat = document.getElementById('editPoolGithubPat').value.trim();
+                if (newPat) {
+                    poolData.github_pat = newPat;
+                }
 
                 try {
                     const response = await authenticatedFetch(`${API_BASE_URL}/pools/${originalName}`, {
@@ -1241,28 +1265,216 @@ data:
                     const data = await response.json();
                     
                     if (response.ok) {
-                        statusEl.className = 'mt-4 p-4 bg-green-100 text-green-800 rounded-md';
-                        statusEl.innerHTML = 'Pool updated successfully!';
-                        
-                        // Reload the pools list
+                        alert('Pool updated successfully');
+                        closeEditPoolModal();
                         loadPools();
-                        
-                        // Close the modal after a short delay
-                        setTimeout(() => {
-                            closeEditPoolModal();
-                        }, 1000);
                     } else {
-                        statusEl.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
-                        statusEl.innerHTML = `Error: ${data.error || 'Failed to update pool'}`;
+                        alert(`Error: ${data.error || 'Failed to update pool'}`);
                     }
                 } catch (error) {
                     console.error('Error updating pool:', error);
                     if (error.message !== 'Authentication required') {
-                        statusEl.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
-                        statusEl.innerHTML = 'Failed to update pool. Please try again later.';
+                        alert('Failed to update pool. Please try again later.');
                     }
                 }
             }
+
+            // VM Management Functions
+            async function getAvailableVMs(poolName) {
+                try {
+                    const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}/available`);
+                    const data = await response.json();
+                    return data.workspaces || [];
+                } catch (error) {
+                    console.error('Error getting available VMs:', error);
+                    return [];
+                }
+            }
+
+            async function markVMAsUsed(poolName, workspaceId) {
+                try {
+                    // Disable the button and show loading state
+                    const button = document.querySelector(`button[onclick="markVMAsUsed('${poolName}', '${workspaceId}')"]`);
+                    if (button) {
+                        button.disabled = true;
+                        button.innerHTML = `
+                            <svg class="animate-spin -ml-1 mr-2 h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Marking as used...
+                        `;
+                    }
+
+                    const response = await authenticatedFetch(
+                        `${API_BASE_URL}/pools/${poolName}/workspaces/${workspaceId}/use`,
+                        {
+                            method: 'POST'
+                        }
+                    );
+                    const data = await response.json();
+                    if (response.ok) {
+                        // Update button to show success state temporarily
+                        if (button) {
+                            button.className = 'bg-green-500 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+                            button.innerHTML = `
+                                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                                VM In Use
+                            `;
+                        }
+                        // Refresh the VM list view
+                        await usePoolVMs(poolName);
+                        // Also refresh the main pools view
+                        await loadPools();
+                        return true;
+                    } else {
+                        alert(`Error: ${data.error || 'Failed to mark VM as used'}`);
+                        return false;
+                    }
+                } catch (error) {
+                    console.error('Error marking VM as used:', error);
+                    alert('Failed to mark VM as used. Please try again.');
+                    return false;
+                }
+            }
+
+            async function releaseVM(poolName, workspaceId) {
+                try {
+                    // Disable the button and show loading state
+                    const button = document.querySelector(`button[onclick="releaseVM('${poolName}', '${workspaceId}')"]`);
+                    if (button) {
+                        button.disabled = true;
+                        button.className = 'bg-gray-400 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+                        button.innerHTML = `
+                            <svg class="animate-spin -ml-1 mr-2 h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Releasing...
+                        `;
+                    }
+
+                    const response = await authenticatedFetch(
+                        `${API_BASE_URL}/pools/${poolName}/workspaces/${workspaceId}/release`,
+                        {
+                            method: 'POST'
+                        }
+                    );
+                    const data = await response.json();
+                    if (response.ok) {
+                        // Update button to show success state temporarily
+                        if (button) {
+                            button.className = 'bg-blue-500 text-white px-3 py-1 rounded-md text-sm transition duration-200';
+                            button.innerHTML = `
+                                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                                Released
+                            `;
+                        }
+                        // Refresh the VM list view
+                        await usePoolVMs(poolName);
+                        // Also refresh the main pools view
+                        await loadPools();
+                        return true;
+                    } else {
+                        alert(`Error: ${data.error || 'Failed to release VM'}`);
+                        return false;
+                    }
+                } catch (error) {
+                    console.error('Error releasing VM:', error);
+                    alert('Failed to release VM. Please try again.');
+                    return false;
+                }
+            }
+
+            // --- Inserted: Pool VMs Display and Interaction Functions ---
+            async function showPoolContent(poolName) {
+                document.getElementById('poolContent').classList.remove('hidden');
+                document.getElementById('currentPool').textContent = poolName;
+                try {
+                    const poolVMs = await usePoolVMs(poolName);
+                    if (!poolVMs) {
+                        document.getElementById('totalVMs').textContent = '0';
+                        document.getElementById('availableVMs').textContent = '0';
+                        document.getElementById('inUseVMs').textContent = '0';
+                        document.querySelector('#vmsTable tbody').innerHTML = '<tr><td colspan="6" class="text-center py-4 text-gray-500">No VMs found in this pool.</td></tr>';
+                        return;
+                    }
+                    document.getElementById('totalVMs').textContent = poolVMs.totalVMs;
+                    document.getElementById('availableVMs').textContent = poolVMs.availableVMs;
+                    document.getElementById('inUseVMs').textContent = poolVMs.inUseVMs;
+                    const tbody = document.querySelector('#vmsTable tbody');
+                    tbody.innerHTML = '';
+                    poolVMs.workspaces.forEach(vm => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${vm.effective_id}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.status}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.ready_replicas || '-'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                ${vm.url ? `<a href="${vm.url}" target="_blank" class="text-blue-500 hover:underline">Open</a>` : '-'}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.last_used ? new Date(vm.last_used).toLocaleString() : '-'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                ${!vm.in_use
+                                    ? `<button onclick="markVMAsUsed('${poolName}','${vm.effective_id}')" class="bg-green-500 text-white px-3 py-1 rounded-md text-xs hover:bg-green-600">Mark as Used</button>`
+                                    : `<button onclick="releaseVM('${poolName}','${vm.effective_id}')" class="bg-yellow-500 text-white px-3 py-1 rounded-md text-xs hover:bg-yellow-600">Release</button>`
+                                }
+                            </td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                } catch (err) {
+                    alert('Failed to load VMs for this pool.');
+                }
+            }
+            function closePoolContent() {
+                document.getElementById('poolContent').classList.add('hidden');
+            }
+            // --- END Pool VMs Display and Interaction Functions ---
         </script>
     </body>
     </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-ui
+  namespace: workspace-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workspace-ui
+  template:
+    metadata:
+      labels:
+        app: workspace-ui
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: html
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: html
+        configMap:
+          name: workspace-ui
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-ui
+  namespace: workspace-system
+spec:
+  selector:
+    app: workspace-ui
+  ports:
+  - port: 80
+    targetPort: 80
