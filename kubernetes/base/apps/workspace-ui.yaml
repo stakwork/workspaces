@@ -1409,18 +1409,21 @@ data:
                     const tbody = document.querySelector('#vmsTable tbody');
                     tbody.innerHTML = '';
                     poolVMs.workspaces.forEach(vm => {
+                        const accessUrl = vm.url || (vm.fqdn ? `https://${vm.fqdn}` : null);
+                        const password = vm.password && vm.password !== '********' ? vm.password : '';
                         const tr = document.createElement('tr');
                         tr.innerHTML = `
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${vm.effective_id}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.status}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.ready_replicas || '-'}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">
-                                ${vm.url ? `<a href="${vm.url}" target="_blank" class="text-blue-500 hover:underline">Open</a>` : '-'}
+                                ${accessUrl ? `<a href="${accessUrl}" target="_blank" class="text-blue-500 hover:underline">${accessUrl}</a>` : '-'}
+                                ${password ? `<div class='text-xs text-gray-500 mt-1'>Password: <span class='font-mono bg-gray-100 px-2 py-1 rounded'>${password}</span></div>` : ''}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.last_used ? new Date(vm.last_used).toLocaleString() : '-'}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">
                                 ${!vm.in_use
-                                    ? `<button onclick="markVMAsUsed('${poolName}','${vm.effective_id}')" class="bg-green-500 text-white px-3 py-1 rounded-md text-xs hover:bg-green-600">Mark as Used</button>`
+                                    ? `<button onclick="markVMAsUsed('${poolName}','${vm.effective_id}')" class="bg-green-500 text-white px-3 py-1 rounded-md text-xs hover:bg-green-600">Use VM</button>`
                                     : `<button onclick="releaseVM('${poolName}','${vm.effective_id}')" class="bg-yellow-500 text-white px-3 py-1 rounded-md text-xs hover:bg-yellow-600">Release</button>`
                                 }
                             </td>
