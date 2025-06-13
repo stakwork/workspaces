@@ -614,7 +614,7 @@ data:
                                 } else if (workspace.repoName) {
                                     repoName = workspace.repoName;
                                 } else {
-                                    return;
+                                    repoName = 'Unnamed Workspace';
                                 }
                             } catch (e) {
                                 console.warn('Error parsing repository name:', e);
