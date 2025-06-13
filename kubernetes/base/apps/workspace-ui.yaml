@@ -162,10 +162,6 @@ data:
                 </div>
             </div>
 
-            <!-- Pool Management -->
-            <div class="bg-white p-6 rounded-lg shadow-md">
-                <h2 class="text-xl font-semibold mb-4">Pool Management</h2>
-                
                 <!-- Create Pool Form -->
                 <div class="bg-white p-6 rounded-lg shadow-md mb-8">
                     <h3 class="text-lg font-medium mb-4">Create New Pool</h3>
@@ -300,7 +296,6 @@ data:
                     </form>
                 </div>
             </div>
-        </div>
 
         <script>
             const API_BASE_URL = '/api';
