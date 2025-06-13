@@ -57,10 +57,12 @@ def token_required(f):
             auth_header = request.headers['Authorization']
             try:
                 token = auth_header.split(" ")[1]  # Bearer <token>
+                logger.debug(f"Token received: {token}")
             except IndexError:
-                return jsonify({'error': 'Invalid token format'}), 401
+                logger.warning("Authorization header is malformed")
         
         if not token:
+            logger.warning("Missing token in request headers")
             return jsonify({'error': 'Token is missing'}), 401
         
         try:
@@ -71,12 +73,15 @@ def token_required(f):
                 'role': data.get('role', 'user'),
                 'exp': data['exp']
             }
+            logger.debug(f"Token valid. Decoded data: {current_user}")
         except jwt.ExpiredSignatureError:
+            logger.warning("Token has expired")
             return jsonify({'error': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
+            logger.warning("Invalid token")
             return jsonify({'error': 'Token is invalid'}), 401
         except Exception as e:
-            logger.error(f"Token validation error: {str(e)}")
+            logger.error(f"Token validation error: {str(e)}", exc_info=True)
             return jsonify({'error': 'Token validation failed'}), 401
         
         return f(current_user, *args, **kwargs)

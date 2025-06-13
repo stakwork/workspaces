@@ -50,6 +50,9 @@ data:
                     <a href="/pools" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition-colors">
                         Pool Management
                     </a>
+                    <a href="/pools" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition-colors">
+                        Pools
+                    </a>
                 </div>
                 <div class="flex items-center space-x-4">
                     <span id="userInfo" class="text-gray-600"></span>
@@ -552,12 +555,9 @@ data:
                 try {
                     const response = await authenticatedFetch(`${API_BASE_URL}/workspaces`);
                     const data = await response.json();
-                    
                     const workspacesList = document.getElementById('workspacesList');
-                    
                     if (data.workspaces && data.workspaces.length > 0) {
                         workspacesList.innerHTML = '';
-                        
                         data.workspaces.forEach(workspace => {
                             if (!workspace) return; // Skip if workspace is undefined
                             const workspaceEl = document.createElement('div');
@@ -679,13 +679,13 @@ data:
                             workspacesList.appendChild(workspaceEl);
                         });
                     } else {
-                        workspacesList.innerHTML = '<p class="text-gray-500">No workspaces found. Create one to get started.</p>';
+                        workspacesList.innerHTML = '<p class="text-gray-500 text-center font-medium">No workspaces found. Create one to get started.</p>';
                     }
                 } catch (error) {
                     console.error('Error loading workspaces:', error);
                     if (error.message !== 'Authentication required') {
                         document.getElementById('workspacesList').innerHTML = 
-                            '<p class="text-red-500">Failed to load workspaces. Please try again later.</p>';
+                            '<p class="text-red-500 text-center">Failed to load workspaces. Please try again later.</p>';
                     }
                 }
             }
@@ -1357,6 +1357,90 @@ data:
                     console.error('Error releasing VM:', error);
                     alert('Failed to release VM. Please try again.');
                     return false;
+                }
+            }
+
+            async function fetchPools() {
+                try {
+                    const res = await authenticatedFetch('/api/pools');
+                    const data = await res.json();
+                    const poolsList = document.getElementById('poolsList');
+                    poolsList.innerHTML = '';
+
+                    if (data.pools && data.pools.length > 0) {
+                        data.pools.forEach(pool => {
+                            const poolEl = document.createElement('div');
+                            poolEl.className = 'border border-gray-200 rounded-md p-4 mb-4';
+                            
+                            const healthBadge = pool.is_healthy 
+                                ? '<span class="text-xs px-2 py-1 rounded-full bg-green-100 text-green-800">Healthy</span>'
+                                : '<span class="text-xs px-2 py-1 rounded-full bg-red-100 text-red-800">Unhealthy</span>';
+                            
+                            const statusMessage = pool.status_message || 'No status message available';
+
+                            // Get current and target VM counts
+                            const currentVMs = pool.workspace_count || 0;
+                            const targetVMs = pool.minimum_vms || 0;
+                            const vmStatusColor = currentVMs >= targetVMs ? 'text-green-600' : 'text-yellow-600';
+
+                            poolEl.innerHTML = `
+                                <div class="flex justify-between items-start">
+                                    <div class="flex-grow">
+                                        <div class="flex items-center space-x-2 mb-2">
+                                            <h3 class="text-xl font-semibold">${pool.name}</h3>
+                                            ${healthBadge}
+                                        </div>
+                                        
+                                        <!-- Repository info -->
+                                        <div class="bg-gray-50 p-3 rounded-md mb-3">
+                                            <p class="text-sm">
+                                                <span class="font-medium">Repository:</span> 
+                                                ${pool.repo_name}
+                                            </p>
+                                            <p class="text-sm">
+                                                <span class="font-medium">Branch:</span> 
+                                                ${pool.branch_name || 'default'}
+                                            </p>
+                                            <p class="text-sm mt-2">
+                                                <span class="font-medium">Status:</span> 
+                                                <span class="text-gray-600">${statusMessage}</span>
+                                            </p>
+                                        </div>
+                                        
+                                        <!-- VM stats -->
+                                        <div class="grid grid-cols-3 gap-4 mb-3">
+                                            <div class="bg-white p-3 rounded-lg shadow-sm border">
+                                                <h4 class="text-sm font-medium text-gray-500">Current VMs</h4>
+                                                <p class="text-2xl font-bold ${vmStatusColor}">${currentVMs}</p>
+                                            </div>
+                                            <div class="bg-white p-3 rounded-lg shadow-sm border">
+                                                <h4 class="text-sm font-medium text-gray-500">Target VMs</h4>
+                                                <p class="text-2xl font-bold text-blue-600">${targetVMs}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Action buttons -->
+                                    <div class="flex space-x-2">
+                                        <button onclick="editPool('${pool.name}')" 
+                                            class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
+                                            Edit
+                                        </button>
+                                        <button onclick="deletePool('${pool.name}')" 
+                                            class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm transition duration-200">
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            `;
+                            
+                            poolsList.appendChild(poolEl);
+                        });
+                    } else {
+                        poolsList.innerHTML = '<p class="text-gray-500">No pools found. Create one to get started.</p>';
+                    }
+                } catch (err) {
+                    alert(err.message);
                 }
             }
         </script>
