@@ -422,10 +422,11 @@ fi
 REPO_FULL="{repo_name}"
 if [[ "$REPO_FULL" == https://* ]]; then
     # If it's a full URL, extract just the path part after github.com/
-    REPO_NAME=$(echo "$REPO_FULL" | sed 's|https://github.com/||')
+    REPO_PATH=$(echo "$REPO_FULL" | sed 's|https://github.com/||')
+    REPO_NAME=$(basename "$REPO_PATH")
 else
-    # If it's already just the org/repo format, use as is
-    REPO_NAME="$REPO_FULL"
+    # If it's already just the org/repo format, use is
+    REPO_NAME=$(basename "$REPO_FULL")
 fi
 BRANCH="{branch_name}"
 
