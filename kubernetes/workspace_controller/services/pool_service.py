@@ -256,12 +256,37 @@ class PoolService:
         except Exception:
             return False
 
-    def create_workspace_from_pool(self, pool):
-        """Create a new workspace using pool configuration"""
-        # Implementation will depend on your workspace creation logic
-        # Use pool.repo_name, pool.branch_name, and pool.github_pat
-        # Add label to link workspace to pool
-        pass
+    def create_workspace_from_pool(self, pool: Pool) -> str:
+        """Create a new workspace using pool configuration.
+        
+        Args:
+            pool: The Pool object containing the configuration
+            
+        Returns:
+            The workspace ID if creation was successful, None otherwise
+        """
+        try:
+            workspace_id = str(uuid.uuid4())
+            
+            # Create workspace using pool configuration
+            if self._create_workspace(
+                workspace_id=workspace_id,
+                repo_name=pool.repo_name,
+                branch_name=pool.branch_name,
+                github_pat=pool.github_pat,
+                pool_name=pool.name
+            ):
+                # Add workspace to pool tracking
+                pool.add_workspace(workspace_id)
+                logger.info(f"Created workspace {workspace_id} for pool {pool.name}")
+                return workspace_id
+            else:
+                logger.error(f"Failed to create workspace for pool {pool.name}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error creating workspace for pool {pool.name}: {e}")
+            return None
 
     def _update_pool_status(self, pool):
         """Update pool status in ConfigMap"""
@@ -331,7 +356,7 @@ class PoolService:
                         name=namespace,
                         labels={
                             "workspace-id": workspace_id,
-                            "pool-name": pool_name,
+                            "pool": pool_name,  # Use this for pool association
                             "app": "workspace"
                         }
                     )
@@ -358,6 +383,94 @@ class PoolService:
                 data={"info": json.dumps(workspace_info)}
             )
             self.core_v1.create_namespaced_config_map(namespace, info_config_map)
+
+            # Create workspace initialization script ConfigMap
+            init_script = """#!/bin/bash
+set -e
+set -x
+
+# Ensure workspace directory exists
+mkdir -p /workspaces
+
+# Change to workspace directory
+cd /workspaces
+
+# Configure git for private repo access
+if [ ! -z "$GITHUB_TOKEN" ]; then
+    git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
+fi
+
+# Clone repository
+if [ ! -d "/workspaces/{repo_name}" ]; then
+    if [ ! -z "{branch_name}" ]; then
+        echo "Cloning {repo_name} branch {branch_name}..."
+        git clone -b {branch_name} https://github.com/{repo_name} {repo_name}
+    else
+        echo "Cloning {repo_name} default branch..."
+        git clone https://github.com/{repo_name} {repo_name}
+    fi
+fi
+
+# Mark repository as safe
+git config --global --add safe.directory "/workspaces/{repo_name}"
+git config --global --add safe.directory "*"
+
+# Process devcontainer configuration
+DEVCONTAINER_PATH="/workspaces/{repo_name}/.devcontainer"
+if [ -d "$DEVCONTAINER_PATH" ]; then
+    echo "Found .devcontainer directory"
+    
+    # Check for devcontainer.json
+    if [ -f "$DEVCONTAINER_PATH/devcontainer.json" ]; then
+        echo "Found devcontainer.json - processing configuration"
+        cp "$DEVCONTAINER_PATH/devcontainer.json" /workspaces/devcontainer.json
+        
+        # Install jq if needed
+        if ! command -v jq &> /dev/null; then
+            apt-get update && apt-get install -y jq
+        fi
+        
+        # Extract extensions
+        EXTENSIONS=$(jq -r '.extensions[]? // empty' "/workspaces/devcontainer.json" 2>/dev/null || \
+                    jq -r '.customizations.vscode.extensions[]? // empty' "/workspaces/devcontainer.json" 2>/dev/null)
+        if [ ! -z "$EXTENSIONS" ]; then
+            echo "$EXTENSIONS" > /workspaces/.extensions-list
+        fi
+        
+        # Extract environment variables
+        ENV_VARS=$(jq -r '.containerEnv // empty | to_entries[] | "\\(.key)=\\(.value)"' "/workspaces/devcontainer.json")
+        if [ ! -z "$ENV_VARS" ]; then
+            echo "$ENV_VARS" > /workspaces/.container-env
+        fi
+        
+        # Extract features and create installation script
+        FEATURES=$(jq -r '.features // empty' "/workspaces/devcontainer.json")
+        if [ ! -z "$FEATURES" ]; then
+            echo "$FEATURES" > /workspaces/.devcontainer-features
+        fi
+    fi
+
+    # Check for Dockerfile
+    if [ -f "$DEVCONTAINER_PATH/Dockerfile" ]; then
+        echo "Found Dockerfile - copying to build context"
+        mkdir -p /workspaces/.user-dockerfile
+        cp "$DEVCONTAINER_PATH/Dockerfile" /workspaces/.user-dockerfile/
+    fi
+fi
+
+# Create flag file to indicate initialization complete
+touch /workspaces/.pool-workspace-initialized
+"""
+            
+            init_config_map = client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(
+                    name="workspace-init",
+                    namespace=namespace,
+                    labels={"app": "workspace"}
+                ),
+                data={"init.sh": init_script}
+            )
+            self.core_v1.create_namespaced_config_map(namespace, init_config_map)
             
             # Create workspace secret
             secret = client.V1Secret(
@@ -393,9 +506,8 @@ class PoolService:
                 self.core_v1.create_namespaced_secret(namespace, wildcard_cert_new)
             except Exception as e:
                 logger.error(f"Error copying wildcard certificate: {e}")
-                # Continue anyway, SSL might not work
             
-            # Create the deployment
+            # Create the workspace deployment
             deployment = client.V1Deployment(
                 metadata=client.V1ObjectMeta(
                     name="workspace",
@@ -411,39 +523,128 @@ class PoolService:
                             labels={"app": "workspace"}
                         ),
                         spec=client.V1PodSpec(
-                            containers=[
+                            init_containers=[
                                 client.V1Container(
-                                    name="workspace",
-                                    image="linuxserver/code-server:latest",
-                                    env=[
-                                        client.V1EnvVar(
-                                            name="GITHUB_URL",
-                                            value=repo_name
+                                    name="init-workspace",
+                                    image="buildpack-deps:22.04-scm",
+                                    command=["/bin/bash", "/scripts/init.sh"],
+                                    volume_mounts=[
+                                        client.V1VolumeMount(
+                                            name="workspace-data",
+                                            mount_path="/workspaces",
+                                            sub_path="workspaces"
                                         ),
-                                        client.V1EnvVar(
-                                            name="GITHUB_BRANCH",
-                                            value=branch_name
-                                        ),
-                                        client.V1EnvVar(
-                                            name="PASSWORD",
-                                            value=password
+                                        client.V1VolumeMount(
+                                            name="init-script",
+                                            mount_path="/scripts"
                                         )
                                     ],
-                                    ports=[
-                                        client.V1ContainerPort(
-                                            container_port=8443,
-                                            name="code-server"
+                                    env=[
+                                        client.V1EnvVar(
+                                            name="GITHUB_TOKEN",
+                                            value_from=client.V1EnvVarSource(
+                                                secret_key_ref=client.V1SecretKeySelector(
+                                                    name="workspace-secret",
+                                                    key="github_token",
+                                                    optional=True
+                                                )
+                                            )
                                         )
                                     ]
+                                )
+                            ],
+                            containers=[
+                                client.V1Container(
+                                    name="code-server",
+                                    image="linuxserver/code-server:latest",
+                                    env=[
+                                        client.V1EnvVar(name="PUID", value="1000"),
+                                        client.V1EnvVar(name="PGID", value="1000"),
+                                        client.V1EnvVar(name="TZ", value="UTC"),
+                                        client.V1EnvVar(
+                                            name="PASSWORD",
+                                            value_from=client.V1EnvVarSource(
+                                                secret_key_ref=client.V1SecretKeySelector(
+                                                    name="workspace-secret",
+                                                    key="password"
+                                                )
+                                            )
+                                        ),
+                                        client.V1EnvVar(name="DOCKER_HOST", value="unix:///var/run/docker.sock"),
+                                        client.V1EnvVar(name="GITHUB_TOKEN",
+                                            value_from=client.V1EnvVarSource(
+                                                secret_key_ref=client.V1SecretKeySelector(
+                                                    name="workspace-secret",
+                                                    key="github_token",
+                                                    optional=True
+                                                )
+                                            )
+                                        )
+                                    ],
+                                    volume_mounts=[
+                                        client.V1VolumeMount(
+                                            name="workspace-data",
+                                            mount_path="/config",
+                                            sub_path="config"
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="workspace-data", 
+                                            mount_path="/workspaces",
+                                            sub_path="workspaces"
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="docker-lib",
+                                            mount_path="/var/lib/docker"
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="docker-sock",
+                                            mount_path="/var/run"
+                                        )
+                                    ],
+                                    lifecycle=client.V1Lifecycle(
+                                        post_start=client.V1LifecycleHandler(
+                                            _exec=client.V1ExecAction(
+                                                command=self._create_post_start_command()
+                                            )
+                                        )
+                                    ),
+                                    security_context=client.V1SecurityContext(
+                                        privileged=True,
+                                        capabilities=client.V1Capabilities(
+                                            add=["SYS_ADMIN", "NET_ADMIN"]
+                                        )
+                                    )
+                                )
+                            ],
+                            volumes=[
+                                client.V1Volume(
+                                    name="workspace-data",
+                                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                                        claim_name="workspace-data"
+                                    )
+                                ),
+                                client.V1Volume(
+                                    name="init-script",
+                                    config_map=client.V1ConfigMapVolumeSource(
+                                        name="workspace-init",
+                                        default_mode=0o755
+                                    )
+                                ),
+                                client.V1Volume(
+                                    name="docker-lib",
+                                    empty_dir={}
+                                ),
+                                client.V1Volume(
+                                    name="docker-sock",
+                                    empty_dir={}
                                 )
                             ]
                         )
                     )
                 )
             )
-            
             self.apps_v1.create_namespaced_deployment(namespace, deployment)
-            
+
             # Create service
             service = client.V1Service(
                 metadata=client.V1ObjectMeta(
@@ -901,3 +1102,212 @@ class PoolService:
         except Exception as e:
             logger.error(f"Error getting pool workspaces: {e}")
             return None
+    
+    def _create_post_start_command(self) -> list:
+        """Create the post-start command for workspace container initialization.
+
+        Returns a command array to be used as a post-start lifecycle hook that:
+        1. Waits for workspace initialization
+        2. Installs VS Code extensions
+        3. Sets up environment variables
+        4. Installs and configures devcontainer features
+        5. Validates the initialization
+
+        The command includes retry logic and proper progress tracking.
+        """
+        commands = [
+            "#!/bin/bash",
+            "set -e",  # Exit on error
+            "set -x",  # Print commands for debugging
+            
+            # Create status file
+            "STATUS_FILE=/workspaces/.pool-init-status",
+            "echo 'starting' > $STATUS_FILE",
+            
+            # Function to update status
+            "update_status() {",
+            "    echo \"$1\" > $STATUS_FILE",
+            "    echo \"[$(date)] $1\"",
+            "}",
+
+            # Function for retrying commands
+            "retry() {",
+            "    local n=1",
+            "    local max=5",
+            "    local delay=15",
+            "    while true; do",
+            "        echo \"Attempt $n/$max: $@\"",
+            "        \"$@\" && break || {",
+            "            if [[ $n -lt $max ]]; then",
+            "                ((n++))",
+            "                echo \"Command failed. Attempt $n/$max:\"",
+            "                sleep $delay;",
+            "            else",
+            "                echo \"The command has failed after $n attempts.\"",
+            "                return 1",
+            "            fi",
+            "        }",
+            "    done",
+            "}",
+
+            # Wait for workspace initialization with timeout
+            "update_status 'waiting_for_init'",
+            "TIMEOUT=300  # 5 minutes timeout",
+            "COUNTER=0",
+            "while [ ! -f /workspaces/.pool-workspace-initialized ]; do",
+            "    if [ $COUNTER -ge $TIMEOUT ]; then",
+            "        update_status 'init_timeout'",
+            "        echo 'Workspace initialization timed out after 5 minutes'",
+            "        exit 1",
+            "    fi",
+            "    echo 'Waiting for workspace initialization...'",
+            "    sleep 2",
+            "    COUNTER=$((COUNTER + 2))",
+            "done",
+            
+            # Create logs directory
+            "mkdir -p /workspaces/logs",
+            
+            # Install VS Code extensions if any were found
+            "if [ -f /workspaces/.extensions-list ]; then",
+            "    update_status 'installing_extensions'",
+            "    # First wait for code-server to be ready",
+            "    TIMEOUT=60",
+            "    while ! pgrep -f code-server > /dev/null; do",
+            "        if [ $TIMEOUT -le 0 ]; then",
+            "            update_status 'code_server_timeout'",
+            "            echo 'Timeout waiting for code-server to start'",
+            "            exit 1",
+            "        fi",
+            "        echo 'Waiting for code-server to start...'",
+            "        sleep 2",
+            "        TIMEOUT=$((TIMEOUT - 2))",
+            "done",
+            "    # Additional wait to ensure code-server is fully initialized",
+            "    sleep 10",
+            "    # Install extensions with retry logic",
+            "    while IFS= read -r extension; do",
+            "        if [ ! -z \"$extension\" ]; then",
+            "            echo \"Installing extension: $extension\"",
+            "            retry code-server --install-extension \"$extension\" >> /workspaces/logs/extension_install.log 2>&1 || {",
+            "                echo \"Warning: Failed to install extension $extension after retries\"",
+            "            }",
+            "        fi",
+            "    done < /workspaces/.extensions-list",
+            "fi",
+            
+            # Set environment variables if any were found
+            "if [ -f /workspaces/.container-env ]; then",
+            "    update_status 'setting_env_vars'",
+            "    echo 'Setting environment variables...'",
+            "    mkdir -p ~/.config/code-server",
+            "    echo '# Environment variables set by workspace initialization' > ~/.config/code-server/env",
+            "    while IFS= read -r env_var; do",
+            "        if [ ! -z \"$env_var\" ]; then",
+            "            echo \"export $env_var\" >> ~/.config/code-server/env",
+            "            echo \"Added environment variable: $env_var\"",
+            "        fi",
+            "    done < /workspaces/.container-env",
+            "    chmod 600 ~/.config/code-server/env",  # Secure the env file
+            "fi",
+            
+            # Install and configure devcontainer features if any were found
+            "if [ -f /workspaces/.devcontainer-features ]; then",
+            "    update_status 'installing_features'",
+            "    echo 'Installing devcontainer features...'",
+            "    apt-get update && apt-get install -y jq || {",
+            "        echo 'Failed to install jq, cannot process features'",
+            "        update_status 'feature_install_failed'",
+            "        exit 1",
+            "    }",
+            "    FEATURES=$(cat /workspaces/.devcontainer-features)",
+
+            # Docker in Docker setup with health check
+            "    if echo \"$FEATURES\" | jq -e '.docker-in-docker != null' > /dev/null; then",
+            "        echo 'Setting up Docker in Docker...'",
+            "        curl -fsSL https://get.docker.com -o get-docker.sh",
+            "        sh get-docker.sh >> /workspaces/logs/docker_install.log 2>&1 || {",
+            "            echo 'Failed to install Docker'",
+            "            update_status 'docker_install_failed'",
+            "            exit 1",
+            "        }",
+            "        # Start Docker daemon with logging",
+            "        mkdir -p /var/log",
+            "        dockerd >> /var/log/dockerd.log 2>&1 &",
+            "        # Wait for Docker to be ready",
+            "        TIMEOUT=30",
+            "        until docker info >/dev/null 2>&1; do",
+            "            if [ $TIMEOUT -le 0 ]; then",
+            "                echo 'Docker daemon failed to start'",
+            "                update_status 'docker_start_failed'",
+            "                exit 1",
+            "            fi",
+            "            echo 'Waiting for Docker daemon to start...'",
+            "            sleep 1",
+            "            TIMEOUT=$((TIMEOUT - 1))",
+            "        done",
+            "        echo 'Docker daemon started successfully'",
+            "        # Verify Docker works by running hello-world",
+            "        docker run --rm hello-world > /workspaces/logs/docker_test.log 2>&1 || {",
+            "            echo 'Docker test failed'",
+            "            update_status 'docker_test_failed'",
+            "            exit 1",
+            "        }",
+            "    fi",
+
+            # Git feature installation with validation
+            "    if echo \"$FEATURES\" | jq -e '.git != null' > /dev/null; then",
+            "        echo 'Installing additional Git tools...'",
+            "        apt-get install -y git-lfs >> /workspaces/logs/git_install.log 2>&1 || {",
+            "            echo 'Failed to install git-lfs'",
+            "            update_status 'git_install_failed'",
+            "            exit 1",
+            "        }",
+            "        git lfs install >> /workspaces/logs/git_lfs.log 2>&1",
+            "        # Verify git-lfs installation",
+            "        if ! git lfs version > /dev/null 2>&1; then",
+            "            echo 'git-lfs verification failed'",
+            "            update_status 'git_lfs_verify_failed'",
+            "            exit 1",
+            "        fi",
+            "    fi",
+            "fi",
+            
+            # Final validation
+            "echo 'Validating initialization...'",
+            "VALIDATION_FAILED=0",
+            
+            # Check code-server is running",
+            "if ! pgrep -f code-server > /dev/null; then",
+            "    echo 'ERROR: code-server is not running'",
+            "    VALIDATION_FAILED=1",
+            "fi",
+
+            # Check extension installation logs if we installed any
+            "if [ -f /workspaces/.extensions-list ] && [ -f /workspaces/logs/extension_install.log ]; then",
+            "    if grep -i 'error' /workspaces/logs/extension_install.log > /dev/null; then",
+            "        echo 'Warning: Some extensions may have failed to install'",
+            "    fi",
+            "fi",
+
+            # Check Docker if it was installed
+            "if [ -f /var/log/dockerd.log ]; then",
+            "    if ! docker info > /dev/null 2>&1; then",
+            "        echo 'ERROR: Docker is not running properly'",
+            "        VALIDATION_FAILED=1",
+            "    fi",
+            "fi",
+
+            # Final status update
+            "if [ $VALIDATION_FAILED -eq 0 ]; then",
+            "    update_status 'complete'",
+            "    echo 'Post-start initialization completed successfully'",
+            "    touch ~/.config/code-server/.post-start-complete",
+            "else",
+            "    update_status 'validation_failed'",
+            "    echo 'Post-start initialization validation failed'",
+            "    exit 1",
+            "fi",
+        ]
+        
+        return ["/bin/bash", "-c", " && ".join(commands)]
