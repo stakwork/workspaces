@@ -429,14 +429,15 @@ else
 fi
 BRANCH="{branch_name}"
 
-# Clone repository
+# Set up git configuration
 echo "Setting up Git..."
 git config --global --add safe.directory "*"
+git config --global core.longpaths true
 
-# Set proper ownership
+# Create workspace directory if needed
 mkdir -p "/workspaces"
-chown -R 1000:1000 "/workspaces"
 
+# Clone repository if it doesn't exist
 if [ ! -d "/workspaces/$REPO_NAME" ]; then
     if [ ! -z "$BRANCH" ] && [ "$BRANCH" != "None" ] && [ "$BRANCH" != "null" ]; then
         echo "Cloning $REPO_NAME with branch $BRANCH..."
@@ -445,9 +446,6 @@ if [ ! -d "/workspaces/$REPO_NAME" ]; then
         echo "Cloning $REPO_NAME default branch..."
         git clone --quiet --depth 1 "https://github.com/$REPO_NAME" "/workspaces/$REPO_NAME"
     fi
-    
-    # Set proper ownership of cloned repo
-    chown -R 1000:1000 "/workspaces/$REPO_NAME"
 fi
 
 # Mark repository as safe directory
