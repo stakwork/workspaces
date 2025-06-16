@@ -403,7 +403,7 @@ class PoolService:
             self.core_v1.create_namespaced_config_map(namespace, info_config_map)
 
             # Create workspace initialization script ConfigMap
-            init_script = """#!/bin/bash
+            init_script = f"""#!/bin/bash
 set -e
 set -x
 
@@ -418,65 +418,75 @@ if [ ! -z "$GITHUB_TOKEN" ]; then
     git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
 fi
 
-# Clone repository
-if [ ! -d "/workspaces/{repo_name}" ]; then
-    if [ ! -z "{branch_name}" ]; then
-        echo "Cloning {repo_name} branch {branch_name}..."
-        git clone -b {branch_name} https://github.com/{repo_name} {repo_name}
-    else
-        echo "Cloning {repo_name} default branch..."
-        git clone https://github.com/{repo_name} {repo_name}
-    fi
+# Extract repo name from full URL or path
+REPO_FULL="{repo_name}"
+if [[ "$REPO_FULL" == https://* ]]; then
+    # If it's a full URL, extract just the path part after github.com/
+    REPO_NAME=$(echo "$REPO_FULL" | sed 's|https://github.com/||')
+else
+    # If it's already just the org/repo format, use as is
+    REPO_NAME="$REPO_FULL"
 fi
+BRANCH="{branch_name}"
 
-# Mark repository as safe
-git config --global --add safe.directory "/workspaces/{repo_name}"
+# Clone repository
+echo "Setting up Git..."
 git config --global --add safe.directory "*"
 
+# Set proper ownership
+mkdir -p "/workspaces"
+chown -R 1000:1000 "/workspaces"
+
+if [ ! -d "/workspaces/$REPO_NAME" ]; then
+    if [ ! -z "$BRANCH" ] && [ "$BRANCH" != "None" ] && [ "$BRANCH" != "null" ]; then
+        echo "Cloning $REPO_NAME with branch $BRANCH..."
+        git clone --quiet --depth 1 --branch "$BRANCH" "https://github.com/$REPO_NAME" "/workspaces/$REPO_NAME"
+    else
+        echo "Cloning $REPO_NAME default branch..."
+        git clone --quiet --depth 1 "https://github.com/$REPO_NAME" "/workspaces/$REPO_NAME"
+    fi
+    
+    # Set proper ownership of cloned repo
+    chown -R 1000:1000 "/workspaces/$REPO_NAME"
+fi
+
+# Mark repository as safe directory
+git config --global --add safe.directory "/workspaces/$REPO_NAME"
+git config --global --add safe.directory "*"
+
+# Create directories
+mkdir -p /workspaces/.extensions
+mkdir -p /workspaces/.setup
+
 # Process devcontainer configuration
-DEVCONTAINER_PATH="/workspaces/{repo_name}/.devcontainer"
+DEVCONTAINER_PATH="/workspaces/$REPO_NAME/.devcontainer"
 if [ -d "$DEVCONTAINER_PATH" ]; then
     echo "Found .devcontainer directory"
     
     # Check for devcontainer.json
     if [ -f "$DEVCONTAINER_PATH/devcontainer.json" ]; then
         echo "Found devcontainer.json - processing configuration"
-        cp "$DEVCONTAINER_PATH/devcontainer.json" /workspaces/devcontainer.json
-        
-        # Install jq if needed
-        if ! command -v jq &> /dev/null; then
-            apt-get update && apt-get install -y jq
-        fi
-        
-        # Extract extensions
-        EXTENSIONS=$(jq -r '.extensions[]? // empty' "/workspaces/devcontainer.json" 2>/dev/null || \
-                    jq -r '.customizations.vscode.extensions[]? // empty' "/workspaces/devcontainer.json" 2>/dev/null)
-        if [ ! -z "$EXTENSIONS" ]; then
-            echo "$EXTENSIONS" > /workspaces/.extensions-list
-        fi
-        
-        # Extract environment variables
-        ENV_VARS=$(jq -r '.containerEnv // empty | to_entries[] | "\\(.key)=\\(.value)"' "/workspaces/devcontainer.json")
-        if [ ! -z "$ENV_VARS" ]; then
-            echo "$ENV_VARS" > /workspaces/.container-env
-        fi
-        
-        # Extract features and create installation script
-        FEATURES=$(jq -r '.features // empty' "/workspaces/devcontainer.json")
-        if [ ! -z "$FEATURES" ]; then
-            echo "$FEATURES" > /workspaces/.devcontainer-features
+        cp "$DEVCONTAINER_PATH/devcontainer.json" /workspaces/.setup/devcontainer.json
+
+        # Extract extensions if jq is available
+        if command -v jq &> /dev/null; then
+            EXTENSIONS=$(jq -r '.extensions[]? // empty' "/workspaces/.setup/devcontainer.json" 2>/dev/null || \
+                        jq -r '.customizations.vscode.extensions[]? // empty' "/workspaces/.setup/devcontainer.json" 2>/dev/null)
+            if [ ! -z "$EXTENSIONS" ]; then
+                echo "$EXTENSIONS" > /workspaces/.extensions/extension-list
+            fi
         fi
     fi
 
     # Check for Dockerfile
     if [ -f "$DEVCONTAINER_PATH/Dockerfile" ]; then
-        echo "Found Dockerfile - copying to build context"
-        mkdir -p /workspaces/.user-dockerfile
-        cp "$DEVCONTAINER_PATH/Dockerfile" /workspaces/.user-dockerfile/
+        echo "Found Dockerfile"
+        mkdir -p /workspaces/.setup/dockerfile
+        cp "$DEVCONTAINER_PATH/Dockerfile" /workspaces/.setup/dockerfile/
     fi
 fi
 
-# Create flag file to indicate initialization complete
+# Create initialization complete flag
 touch /workspaces/.pool-workspace-initialized
 """
             
