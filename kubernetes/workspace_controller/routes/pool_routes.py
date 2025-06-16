@@ -26,14 +26,9 @@ def configure_routes(pool_service):
             check_service()
             pools = service.list_pools()
             
-            # Convert pool objects to dictionaries
-            pool_list = []
-            if pools:
-                pool_list = [p.to_dict() if hasattr(p, 'to_dict') else p for p in pools]
-            
             return jsonify({
                 "status": "success",
-                "pools": pool_list,
+                "pools": pools if pools else [],
                 "message": "Pools retrieved successfully"
             })
             
@@ -64,13 +59,10 @@ def configure_routes(pool_service):
                 }), 404
                 
             workspaces = service.get_pool_workspaces(decoded_name)
-            workspace_list = []
-            if workspaces:
-                workspace_list = [w.to_dict() if hasattr(w, 'to_dict') else w for w in workspaces]
-            
+            # The workspaces are already dictionaries, no need to call to_dict()
             return jsonify({
                 "status": "success",
-                "workspaces": workspace_list,
+                "workspaces": workspaces if workspaces else [],
                 "message": "Workspaces retrieved successfully"
             })
             

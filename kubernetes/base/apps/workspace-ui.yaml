@@ -181,12 +181,7 @@ data:
                                     <p class="text-xs text-gray-500 mt-1">The default branch will be used if left empty</p>
                                 </div>
 
-                                <div class="mt-4">
-                                    <label class="inline-flex items-center">
-                                        <input type="checkbox" id="enableRepoCloning" class="form-checkbox">
-                                        <span class="ml-2">Enable Repository Cloning</span>
-                                    </label>
-                                </div>
+
                             </div>
                         </div>
 
@@ -1015,8 +1010,18 @@ data:
                 const createPoolForm = document.getElementById('createPoolForm');
                 const editPoolForm = document.getElementById('editPoolForm');
                 
-                createPoolForm.addEventListener('submit', handleCreatePool);
-                editPoolForm.addEventListener('submit', handleEditPool);
+                if (createPoolForm) {
+                    createPoolForm.addEventListener('submit', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleCreatePool(e);
+                        return false;
+                    });
+                }
+                
+                if (editPoolForm) {
+                    editPoolForm.addEventListener('submit', handleEditPool);
+                }
                 
                 loadPools();
             }
@@ -1145,10 +1150,19 @@ data:
 
             // Add handle create pool function
             async function handleCreatePool(e) {
-                e.preventDefault();
+                if (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                
+                const poolName = document.getElementById('poolName').value.trim();
+                if (!poolName) {
+                    alert('Pool name is required');
+                    return;
+                }
                 
                 const poolData = {
-                    name: document.getElementById('poolName').value.trim(),
+                    name: poolName,
                     minimum_vms: parseInt(document.getElementById('minimumVMs').value, 10),
                     repo_name: document.getElementById('repoName').value.trim(),
                     branch_name: document.getElementById('branchName').value.trim() || null,
@@ -1161,6 +1175,14 @@ data:
                 statusEl.classList.remove('hidden');
 
                 try {
+                    // First check if a pool with this name exists
+                    const checkResponse = await authenticatedFetch(`${API_BASE_URL}/pools/${encodeURIComponent(poolName)}`);
+                    if (checkResponse.ok) {
+                        statusEl.className = 'mt-4 p-4 bg-yellow-100 text-yellow-800 rounded-md';
+                        statusEl.innerHTML = `A pool with the name "${poolName}" already exists. Please choose a different name.`;
+                        return;
+                    }
+
                     const response = await authenticatedFetch(`${API_BASE_URL}/pools`, {
                         method: 'POST',
                         headers: {
@@ -1182,7 +1204,10 @@ data:
                         loadPools();
                     } else {
                         statusEl.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
-                        statusEl.innerHTML = `Error: ${data.error || 'Failed to create pool'}`;
+                        const errorMessage = data.error === 'Pool already exists' 
+                            ? `A pool with the name "${poolName}" already exists. Please choose a different name.`
+                            : data.error || 'Failed to create pool';
+                        statusEl.innerHTML = `Error: ${errorMessage}`;
                     }
                 } catch (error) {
                     console.error('Error creating pool:', error);
