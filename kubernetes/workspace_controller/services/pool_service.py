@@ -12,6 +12,7 @@ import base64
 
 from models.pool import Pool
 from models.cleanup import CleanupStatus
+from utils.workspace_init import generate_init_script
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,30 @@ class PoolService:
                    branch_name: str, github_pat: str) -> Optional[Pool]:
         """Create a new pool with the given configuration"""
         try:
-            if name in self.pools:
-                logger.error(f"Pool {name} already exists")
-                return None
+            # Validate pool name format
+            if not name or not name.strip() or not name.replace("-", "").isalnum():
+                logger.error(f"Invalid pool name: {name}")
+                raise ValueError("Pool name must be alphanumeric (hyphens allowed)")
+
+            # Check if pool already exists - case insensitive
+            existing_pool_name = next((p for p in self.pools.keys() if p.lower() == name.lower()), None)
+            if existing_pool_name:
+                logger.error(f"Pool {name} already exists (as {existing_pool_name})")
+                raise ValueError(f"Pool already exists with name: {existing_pool_name}")
+
+            # Validate minimum VMs
+            if minimum_vms < 1:
+                logger.error(f"Invalid minimum VMs: {minimum_vms}")
+                raise ValueError("Minimum VMs must be at least 1")
+
+            # Validate kubernetes API connectivity first
+            try:
+                self.core_v1.list_namespace(limit=1)
+            except client.exceptions.ApiException as e:
+                if e.status == 503:
+                    logger.error("Kubernetes API is currently unavailable")
+                    raise RuntimeError("Kubernetes API is currently unavailable") from e
+                raise RuntimeError(f"Kubernetes API error: {e}") from e
                 
             pool = Pool(name, minimum_vms, repo_name, branch_name, github_pat)
             # Initialize pool attributes
@@ -64,22 +86,77 @@ class PoolService:
             
             self.pools[name] = pool
             logger.info(f"Created new pool: {name} with {minimum_vms} minimum VMs")
+
+            # Create ConfigMap to store pool configuration
+            try:
+                config_map = client.V1ConfigMap(
+                    metadata=client.V1ObjectMeta(
+                        name=f"pool-{name}",
+                        namespace="workspace-system"
+                    ),
+                    data={
+                        'config': json.dumps({
+                            'name': name,
+                            'minimum_vms': minimum_vms,
+                            'repo_name': repo_name,
+                            'branch_name': branch_name,
+                            'created_at': datetime.now().isoformat()
+                        })
+                    }
+                )
+                self.core_v1.create_namespaced_config_map(
+                    namespace="workspace-system",
+                    body=config_map
+                )
+            except client.exceptions.ApiException as e:
+                logger.error(f"Failed to create pool ConfigMap: {e}")
+                del self.pools[name]
+                raise RuntimeError(f"Failed to create pool configuration: {e}") from e
             
-            # Create initial workspaces
-            for _ in range(minimum_vms):
+            # Validate repository name and branch
+            if not repo_name or not repo_name.strip():
+                raise ValueError("Repository name is required")
+
+            # Create initial workspaces with better error handling
+            failed_workspaces = []
+            created_workspaces = []
+            for i in range(minimum_vms):
                 workspace_id = str(uuid.uuid4())
-                if self._create_workspace(workspace_id, repo_name, branch_name, github_pat, name):
-                    pool.add_workspace(workspace_id)
-                    logger.info(f"Created workspace {workspace_id} for pool {name}")
-                else:
-                    logger.error(f"Failed to create workspace for pool {name}")
-            
+                try:
+                    logger.info(f"Creating workspace {i+1}/{minimum_vms} for pool {name}")
+                    if self._create_workspace(workspace_id, repo_name, branch_name, github_pat, name):
+                        pool.add_workspace(workspace_id)
+                        created_workspaces.append(workspace_id)
+                        logger.info(f"Created workspace {workspace_id} for pool {name}")
+                    else:
+                        failed_workspaces.append(workspace_id)
+                        logger.error(f"Failed to create workspace {workspace_id} for pool {name}")
+                except Exception as e:
+                    logger.error(f"Failed to create workspace {workspace_id}: {str(e)}")
+                    failed_workspaces.append(workspace_id)
+                    # Clean up any partially created resources for this workspace
+                    try:
+                        self._cleanup_workspace(workspace_id)
+                    except Exception as cleanup_error:
+                        logger.error(f"Failed to cleanup failed workspace {workspace_id}: {cleanup_error}")
+
+            if failed_workspaces:
+                # Update pool status to reflect partial creation
+                pool.update_status(
+                    is_healthy=False, 
+                    message=f"Pool created with {len(failed_workspaces)} failed workspaces"
+                )
+            else:
+                pool.update_status(True, "Pool created successfully")
+
             # Update pool status in ConfigMap
             self._update_pool_status(pool)
             return pool
             
         except Exception as e:
             logger.error(f"Error creating pool {name}: {e}")
+            if name in self.pools:
+                del self.pools[name]
             return None
 
     def delete_pool(self, name: str) -> bool:
@@ -291,19 +368,37 @@ class PoolService:
     def _update_pool_status(self, pool):
         """Update pool status in ConfigMap"""
         try:
+            # Prepare status data with explicit type conversion to avoid JSON serialization issues
             status_data = {
-                'workspace_count': getattr(pool, 'workspace_count', 0),
-                'is_healthy': getattr(pool, 'is_healthy', False),
-                'status_message': getattr(pool, 'status_message', ''),
-                'last_check': datetime.now().isoformat()
+                'workspace_count': int(getattr(pool, 'workspace_count', 0)),
+                'is_healthy': bool(getattr(pool, 'is_healthy', False)),
+                'status_message': str(getattr(pool, 'status_message', '')),
+                'last_check': datetime.now().isoformat(),
+                'workspace_ids': list(pool.workspace_ids),
+                'used_workspace_ids': list(pool.used_workspace_ids),
+                'minimum_vms': int(pool.minimum_vms)
             }
+            
+            # Validate JSON serialization before updating ConfigMap
+            try:
+                status_json = json.dumps(status_data)
+            except (TypeError, ValueError) as e:
+                logger.error(f"Failed to serialize pool status: {e}")
+                # Fallback to basic status
+                status_data = {
+                    'workspace_count': 0,
+                    'is_healthy': False,
+                    'status_message': f'Status update failed: {str(e)}',
+                    'last_check': datetime.now().isoformat()
+                }
+                status_json = json.dumps(status_data)
             
             try:
                 cm = self.core_v1.read_namespaced_config_map(
                     name=f"pool-{pool.name}",
                     namespace="workspace-system"
                 )
-                cm.data['status'] = json.dumps(status_data)
+                cm.data['status'] = status_json
                 self.core_v1.replace_namespaced_config_map(
                     name=f"pool-{pool.name}",
                     namespace="workspace-system",
@@ -402,92 +497,23 @@ class PoolService:
             )
             self.core_v1.create_namespaced_config_map(namespace, info_config_map)
 
-            # Create workspace initialization script ConfigMap
-            init_script = f"""#!/bin/bash
-set -e
-set -x
-
-# Ensure workspace directory exists
-mkdir -p /workspaces
-
-# Change to workspace directory
-cd /workspaces
-
-# Configure git for private repo access
-if [ ! -z "$GITHUB_TOKEN" ]; then
-    git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
-fi
-
-# Extract repo name and path from full URL or org/repo format
-REPO_FULL="{repo_name}"
-if [[ "$REPO_FULL" == https://github.com/* ]]; then
-    # Remove https://github.com/ prefix if present
-    REPO_PATH=$(echo "$REPO_FULL" | sed 's|https://github.com/||')
-else
-    # Use as-is if it's already in org/repo format
-    REPO_PATH="$REPO_FULL"
-fi
-BRANCH="{branch_name}"
-
-# Set up git configuration
-echo "Setting up Git..."
-git config --global --add safe.directory "*"
-git config --global core.longpaths true
-
-# Create workspace directory if needed
-mkdir -p "/workspaces"
-
-# Clone repository if it doesn't exist
-if [ ! -d "/workspaces/$REPO_PATH" ]; then
-    if [ ! -z "$BRANCH" ] && [ "$BRANCH" != "None" ] && [ "$BRANCH" != "null" ]; then
-        echo "Cloning $REPO_PATH with branch $BRANCH..."
-        git clone --quiet --depth 1 --branch "$BRANCH" "https://github.com/$REPO_PATH" "/workspaces/$REPO_PATH"
-    else
-        echo "Cloning $REPO_PATH default branch..."
-        git clone --quiet --depth 1 "https://github.com/$REPO_PATH" "/workspaces/$REPO_PATH"
-    fi
-fi
-
-# Mark repository as safe directory
-git config --global --add safe.directory "/workspaces/$REPO_NAME"
-git config --global --add safe.directory "*"
-
-# Create directories
-mkdir -p /workspaces/.extensions
-mkdir -p /workspaces/.setup
-
-# Process devcontainer configuration
-DEVCONTAINER_PATH="/workspaces/$REPO_PATH/.devcontainer"
-if [ -d "$DEVCONTAINER_PATH" ]; then
-    echo "Found .devcontainer directory"
-    
-    # Check for devcontainer.json
-    if [ -f "$DEVCONTAINER_PATH/devcontainer.json" ]; then
-        echo "Found devcontainer.json - processing configuration"
-        cp "$DEVCONTAINER_PATH/devcontainer.json" /workspaces/.setup/devcontainer.json
-
-        # Extract extensions if jq is available
-        if command -v jq &> /dev/null; then
-            EXTENSIONS=$(jq -r '.extensions[]? // empty' "/workspaces/.setup/devcontainer.json" 2>/dev/null || \
-                        jq -r '.customizations.vscode.extensions[]? // empty' "/workspaces/.setup/devcontainer.json" 2>/dev/null)
-            if [ ! -z "$EXTENSIONS" ]; then
-                echo "$EXTENSIONS" > /workspaces/.extensions/extension-list
-            fi
-        fi
-    fi
-
-    # Check for Dockerfile
-    if [ -f "$DEVCONTAINER_PATH/Dockerfile" ]; then
-        echo "Found Dockerfile"
-        mkdir -p /workspaces/.setup/dockerfile
-        cp "$DEVCONTAINER_PATH/Dockerfile" /workspaces/.setup/dockerfile/
-    fi
-fi
-
-# Create initialization complete flag
-touch /workspaces/.pool-workspace-initialized
-"""
+            # Generate init script using our utility function
+            workspace_ids = {
+                'namespace_name': namespace,
+                'build_timestamp': datetime.now().strftime('%Y%m%d%H%M%S'),
+                'workspace_id': workspace_id
+            }
+            workspace_config = {
+                'github_urls': [repo_name if repo_name.startswith('http') else f"https://github.com/{repo_name}"],
+                'github_branches': [branch_name if branch_name else "main"],  # Use main as default if no branch specified
+                'github_pat': github_pat,
+                'use_custom_image_url': False  
+            }
             
+            # Generate the initialization script using the imported function
+            init_script = generate_init_script(workspace_ids, workspace_config)
+
+            # Create workspace initialization script ConfigMap            
             init_config_map = client.V1ConfigMap(
                 metadata=client.V1ObjectMeta(
                     name="workspace-init",
@@ -1066,7 +1092,7 @@ touch /workspaces/.pool-workspace-initialized
             pool = self.get_pool(pool_name)
             if not pool:
                 logger.error(f"Pool {pool_name} not found")
-                return None
+                return []
             
             workspaces = []
             for workspace_id in pool.workspace_ids:
@@ -1078,15 +1104,15 @@ touch /workspaces/.pool-workspace-initialized
                     ns_name = f"workspace-{workspace_id}"
                     
                     # Get workspace info from ConfigMap
+                    workspace_info = {}
                     try:
                         info_config_map = self.core_v1.read_namespaced_config_map(
                             name="workspace-info",
                             namespace=ns_name
                         )
-                        workspace_info = json.loads(info_config_map.data["info"])
+                        workspace_info = json.loads(info_config_map.data.get("info", "{}"))
                     except Exception as e:
                         logger.warning(f"Could not read workspace info for {workspace_id}: {e}")
-                        workspace_info = {}
                     
                     deployment = self.apps_v1.read_namespaced_deployment_status(
                         name="workspace",
@@ -1095,15 +1121,13 @@ touch /workspaces/.pool-workspace-initialized
                     
                     # Get workspace status
                     status = "unknown"
-                    if deployment.status.conditions:
-                        if deployment.status.available_replicas == 1:
-                            status = "running"
-                        elif deployment.status.conditions[-1].reason == "ProgressDeadlineExceeded":
-                            status = "failed"
-                        else:
-                            status = "pending"
+                    if deployment.status.available_replicas == 1:
+                        status = "running"
+                    elif deployment.status.conditions and deployment.status.conditions[-1].reason == "ProgressDeadlineExceeded":
+                        status = "failed"
+                    else:
+                        status = "pending"
                     
-                    # Include subdomain and FQDN info from workspace_info
                     workspaces.append({
                         'id': workspace_id,
                         'status': status,
@@ -1121,13 +1145,21 @@ touch /workspaces/.pool-workspace-initialized
                     })
                 except Exception as e:
                     logger.error(f"Error getting workspace {workspace_id} details: {e}")
-                    continue
+                    # Return basic info even if full details can't be retrieved
+                    workspaces.append({
+                        'id': workspace_id,
+                        'status': 'error',
+                        'namespace': f"workspace-{workspace_id}",
+                        'pool_name': pool_name,
+                        'in_use': workspace_id in pool.used_workspace_ids,
+                        'error': str(e)
+                    })
             
             return workspaces
             
         except Exception as e:
             logger.error(f"Error getting pool workspaces: {e}")
-            return None
+            return []
     
     def _create_post_start_command(self) -> list:
         """Create the post-start command for workspace container initialization.
@@ -1337,3 +1369,23 @@ touch /workspaces/.pool-workspace-initialized
         ]
         
         return ["/bin/bash", "-c", " && ".join(commands)]
+
+    def _cleanup_workspace(self, workspace_id: str):
+        """Clean up a failed workspace's resources"""
+        try:
+            namespace = f"workspace-{workspace_id}"
+            
+            # Delete namespace which will cascade delete all resources in it
+            try:
+                self.core_v1.delete_namespace(namespace)
+                logger.info(f"Cleaned up namespace {namespace}")
+            except client.exceptions.ApiException as e:
+                if e.status != 404:  # Ignore if namespace doesn't exist
+                    raise
+            
+            # Additional cleanup if needed (e.g., external resources)
+            logger.info(f"Completed cleanup for workspace {workspace_id}")
+            
+        except Exception as e:
+            logger.error(f"Error during workspace cleanup: {e}")
+            raise

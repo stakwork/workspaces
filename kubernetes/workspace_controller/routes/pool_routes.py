@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from urllib.parse import unquote
 import sys, os
 import logging
+from kubernetes import client
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from auth import token_required
 
@@ -59,19 +60,40 @@ def configure_routes(pool_service):
                 }), 404
                 
             workspaces = service.get_pool_workspaces(decoded_name)
-            # The workspaces are already dictionaries, no need to call to_dict()
+            # Always return list, even if empty 
             return jsonify({
                 "status": "success",
-                "workspaces": workspaces if workspaces else [],
-                "message": "Workspaces retrieved successfully"
+                "workspaces": workspaces,
+                "message": f"Retrieved {len(workspaces)} workspaces successfully"
             })
             
+        except client.exceptions.ApiException as e:
+            # Handle Kubernetes API errors specifically
+            status_code = e.status
+            if status_code == 404:
+                return jsonify({
+                    "status": "error",
+                    "message": "Pool resources not found",
+                    "workspaces": []
+                }), 404
+            elif status_code == 503:
+                return jsonify({
+                    "status": "error", 
+                    "message": "Kubernetes API service unavailable",
+                    "workspaces": []
+                }), 503
+            else:
+                logger.error(f"Kubernetes API error in get_pool_workspaces: {str(e)}", exc_info=True)
+                return jsonify({
+                    "status": "error",
+                    "message": f"Kubernetes API error: {str(e)}",
+                    "workspaces": []
+                }), status_code
         except Exception as e:
             logger.error(f"Error in get_pool_workspaces: {str(e)}", exc_info=True)
             return jsonify({
                 "status": "error",
-                "error": str(e),
-                "message": "Failed to retrieve workspaces",
+                "message": "Internal server error when retrieving workspaces",
                 "workspaces": []
             }), 500
 
@@ -80,28 +102,86 @@ def configure_routes(pool_service):
     def create_pool(current_user):
         try:
             check_service()
-            pool_data = request.get_json()
+            
+            # Validate request content type
+            if not request.is_json:
+                return jsonify({
+                    "status": "error",
+                    "message": "Request must be JSON"
+                }), 415
+            
+            try:
+                pool_data = request.get_json()
+            except Exception as e:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Invalid JSON in request: {str(e)}"
+                }), 400
+            
             required_fields = ['name', 'minimum_vms', 'repo_name']
             missing_fields = [field for field in required_fields if field not in pool_data]
 
             if missing_fields:
-                return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
+                return jsonify({
+                    "status": "error",
+                    "message": f"Missing required fields: {', '.join(missing_fields)}"
+                }), 400
+
+            # Validate minimum_vms
+            try:
+                minimum_vms = int(pool_data['minimum_vms'])
+                if minimum_vms < 1:
+                    return jsonify({
+                        "status": "error",
+                        "message": "minimum_vms must be at least 1"
+                    }), 400
+            except (TypeError, ValueError):
+                return jsonify({
+                    "status": "error",
+                    "message": "minimum_vms must be a valid integer"
+                }), 400
 
             branch_name = pool_data.get('branch_name', 'main')
             pool = service.create_pool(
                 name=pool_data['name'],
-                minimum_vms=pool_data['minimum_vms'],
+                minimum_vms=minimum_vms,
                 repo_name=pool_data['repo_name'],
                 branch_name=branch_name,
                 github_pat=pool_data.get('github_pat')
             )
-            return jsonify(pool.to_dict()), 201
+
+            if pool is None:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Pool '{pool_data['name']}' already exists or creation failed"
+                }), 409
+
+            response_data = pool.to_dict()
+            if 'github_pat' in response_data:
+                del response_data['github_pat']  # Don't expose PAT in response
+
+            return jsonify({
+                "status": "success",
+                "message": "Pool created successfully",
+                "pool": response_data
+            }), 201
+
+        except RuntimeError as e:
+            if "Kubernetes API is currently unavailable" in str(e):
+                return jsonify({
+                    "status": "error",
+                    "message": "Kubernetes API is currently unavailable"
+                }), 503
+            logger.error(f"Runtime error in create_pool: {str(e)}", exc_info=True)
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
         except Exception as e:
             logger.error(f"Error in create_pool: {str(e)}", exc_info=True)
             return jsonify({
                 "status": "error",
-                "error": str(e),
-                "message": "Failed to create pool"
+                "message": "Internal server error while creating pool"
             }), 500
 
     @pool_routes.route('/api/pools/<pool_name>', methods=['DELETE'])
@@ -201,15 +281,23 @@ def configure_routes(pool_service):
             }), 500
 
     def check_service():
-        if not service:
-            logger.error("Pool service not configured")
-            raise RuntimeError("Pool service not configured")
-        
-    def check_service():
-        """Verify that the pool service is configured"""
+        """Verify that the pool service is configured and responding"""
         global service
         if not service:
             logger.error("Pool service not configured")
             raise RuntimeError("Pool service not configured. Please ensure service is properly initialized.")
+
+        # Check if pool service's Kubernetes client is working
+        try:
+            # Try a simple API call to verify connectivity
+            service.core_v1.list_namespace(limit=1)
+        except client.exceptions.ApiException as e:
+            logger.error(f"Pool service Kubernetes API error: {e}")
+            if e.status == 503:
+                raise RuntimeError("Kubernetes API is currently unavailable") from e
+            raise RuntimeError(f"Kubernetes API error: {e}") from e
+        except Exception as e:
+            logger.error(f"Pool service error: {e}")
+            raise RuntimeError(f"Pool service error: {e}") from e
 
     return pool_routes
