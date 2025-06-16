@@ -363,6 +363,24 @@ class PoolService:
                 )
             )
             
+            # Create registry-storage PVC
+            pvc = client.V1PersistentVolumeClaim(
+                metadata=client.V1ObjectMeta(
+                    name="registry-storage",
+                    namespace=namespace,
+                    labels={"app": "workspace"}
+                ),
+                spec=client.V1PersistentVolumeClaimSpec(
+                    access_modes=["ReadWriteMany"],
+                    resources=client.V1ResourceRequirements(
+                        requests={"storage": "10Gi"}
+                    ),
+                    storage_class_name="efs-sc"
+                )
+            )
+            self.core_v1.create_namespaced_persistent_volume_claim(namespace, pvc)
+            logger.info(f"Created registry-storage PVC in namespace: {namespace}")
+            
             # Create workspace info ConfigMap
             workspace_info = {
                 "id": workspace_id,
