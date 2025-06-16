@@ -418,15 +418,14 @@ if [ ! -z "$GITHUB_TOKEN" ]; then
     git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
 fi
 
-# Extract repo name from full URL or path
+# Extract repo name and path from full URL or org/repo format
 REPO_FULL="{repo_name}"
-if [[ "$REPO_FULL" == https://* ]]; then
-    # If it's a full URL, extract just the path part after github.com/
+if [[ "$REPO_FULL" == https://github.com/* ]]; then
+    # Remove https://github.com/ prefix if present
     REPO_PATH=$(echo "$REPO_FULL" | sed 's|https://github.com/||')
-    REPO_NAME=$(basename "$REPO_PATH")
 else
-    # If it's already just the org/repo format, use is
-    REPO_NAME=$(basename "$REPO_FULL")
+    # Use as-is if it's already in org/repo format
+    REPO_PATH="$REPO_FULL"
 fi
 BRANCH="{branch_name}"
 
@@ -439,13 +438,13 @@ git config --global core.longpaths true
 mkdir -p "/workspaces"
 
 # Clone repository if it doesn't exist
-if [ ! -d "/workspaces/$REPO_NAME" ]; then
+if [ ! -d "/workspaces/$REPO_PATH" ]; then
     if [ ! -z "$BRANCH" ] && [ "$BRANCH" != "None" ] && [ "$BRANCH" != "null" ]; then
-        echo "Cloning $REPO_NAME with branch $BRANCH..."
-        git clone --quiet --depth 1 --branch "$BRANCH" "https://github.com/$REPO_NAME" "/workspaces/$REPO_NAME"
+        echo "Cloning $REPO_PATH with branch $BRANCH..."
+        git clone --quiet --depth 1 --branch "$BRANCH" "https://github.com/$REPO_PATH" "/workspaces/$REPO_PATH"
     else
-        echo "Cloning $REPO_NAME default branch..."
-        git clone --quiet --depth 1 "https://github.com/$REPO_NAME" "/workspaces/$REPO_NAME"
+        echo "Cloning $REPO_PATH default branch..."
+        git clone --quiet --depth 1 "https://github.com/$REPO_PATH" "/workspaces/$REPO_PATH"
     fi
 fi
 
@@ -458,7 +457,7 @@ mkdir -p /workspaces/.extensions
 mkdir -p /workspaces/.setup
 
 # Process devcontainer configuration
-DEVCONTAINER_PATH="/workspaces/$REPO_NAME/.devcontainer"
+DEVCONTAINER_PATH="/workspaces/$REPO_PATH/.devcontainer"
 if [ -d "$DEVCONTAINER_PATH" ]; then
     echo "Found .devcontainer directory"
     
