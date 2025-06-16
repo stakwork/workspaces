@@ -530,7 +530,7 @@ touch /workspaces/.pool-workspace-initialized
                                     command=["/bin/bash", "/scripts/init.sh"],
                                     volume_mounts=[
                                         client.V1VolumeMount(
-                                            name="workspace-data",
+                                            name="registry-storage",
                                             mount_path="/workspaces",
                                             sub_path="workspaces"
                                         ),
@@ -583,12 +583,12 @@ touch /workspaces/.pool-workspace-initialized
                                     ],
                                     volume_mounts=[
                                         client.V1VolumeMount(
-                                            name="workspace-data",
+                                            name="registry-storage",
                                             mount_path="/config",
                                             sub_path="config"
                                         ),
                                         client.V1VolumeMount(
-                                            name="workspace-data", 
+                                            name="registry-storage", 
                                             mount_path="/workspaces",
                                             sub_path="workspaces"
                                         ),
@@ -618,9 +618,9 @@ touch /workspaces/.pool-workspace-initialized
                             ],
                             volumes=[
                                 client.V1Volume(
-                                    name="workspace-data",
+                                    name="registry-storage",
                                     persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                                        claim_name="workspace-data"
+                                        claim_name="registry-storage"
                                     )
                                 ),
                                 client.V1Volume(
