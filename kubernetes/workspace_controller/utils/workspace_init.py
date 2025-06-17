@@ -18,9 +18,88 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
     repo_url = workspace_config.get('github_urls', [""])[0]
     repo_name = repo_url.split('/')[-1].replace('.git', '')
     branch = workspace_config.get('github_branches', ["main"])[0]
+
+    init_script = [f"""#!/bin/bash
+set -e
+
+# Initialize error counter
+ERROR_COUNT=0
+
+# Create necessary directories
+mkdir -p /workspaces/.user-dockerfile
+cd /workspaces
+
+# Clone repository first
+echo "Cloning repository {repo_url}..."
+if [ ! -d "{repo_name}" ]; then
+    if [ ! -z "{branch}" ]; then
+        echo "Cloning with branch: {branch}"
+        git clone -b {branch} "{repo_url}" "{repo_name}"
+    else
+        echo "Cloning with default branch"
+        git clone "{repo_url}" "{repo_name}"
+    fi
+
+    if [ $? -eq 0 ]; then
+        echo "Repository cloned successfully"
+        git config --global --add safe.directory "/workspaces/{repo_name}"
+    else
+        echo "Failed to clone repository"
+        ((ERROR_COUNT++))
+    fi
+fi
+
+# Set up paths
+USER_REPO_PATH="/workspaces/{repo_name}"
+DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
+DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
+
+# Process Dockerfile and devcontainer.json
+if [ -d "$USER_REPO_PATH" ]; then
+    echo "Repository exists at $USER_REPO_PATH"
     
-    base_script = _generate_workspace_script(workspace_ids, workspace_config)
-    init_script = [
+    if [ -f "$DOCKERFILE_PATH" ]; then
+        echo "Found Dockerfile, copying to workspace"
+        cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
+        
+        if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
+            echo "Found devcontainer.json, processing configuration"
+            cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
+            
+            # Install jq if needed
+            if ! command -v jq &> /dev/null; then
+                apt-get update && apt-get install -y jq tmux
+            fi
+            
+            # Process JSON configurations
+            jq -r '.features // {{}}' "$DEVCONTAINER_JSON_PATH" > /workspaces/.devcontainer-features 2>/dev/null
+            jq -r '.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" > /workspaces/.extensions-list 2>/dev/null
+            
+            # Extract other configurations
+            if [ -s "$DEVCONTAINER_JSON_PATH" ]; then
+                jq -r '.settings // empty' "$DEVCONTAINER_JSON_PATH" > /workspaces/.vscode/settings.json 2>/dev/null
+                jq -r '.forwardPorts[]? // empty' "$DEVCONTAINER_JSON_PATH" > /workspaces/.forward-ports 2>/dev/null
+            fi
+        fi
+    else
+        echo "No Dockerfile found, using default Go image"
+        mkdir -p /workspaces/.user-dockerfile
+        echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+    fi
+else
+    echo "ERROR: Repository directory does not exist"
+    ((ERROR_COUNT++))
+    mkdir -p /workspaces/.user-dockerfile
+    echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+fi
+
+# Final status
+echo "Workspace initialization completed with $ERROR_COUNT errors"
+touch /workspaces/.pool-workspace-initialized
+echo "[$(date)] Initialization finished"
+"""
+    ]
+    init_script.extend([
     f"""
         # Create directory for wrapper Dockerfile and user Dockerfile
         mkdir -p /workspaces/
@@ -162,7 +241,7 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
             echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
         fi
         """
-    ]
+    ])
     # Add repository cloning commands
     for url, branch in zip(
         workspace_config.get('github_urls', []), 
