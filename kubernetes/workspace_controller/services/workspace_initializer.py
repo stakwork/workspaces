@@ -34,13 +34,32 @@ class WorkspaceInitializer:
 
             logger.info(f"Initializing workspace in namespace: {namespace} with build_timestamp: {build_timestamp} and subdomain: {subdomain}")
 
-            # Create namespace
-            self._create_namespace({
-                'namespace_name': namespace,
-                'workspace_id': workspace_id,
-                'build_timestamp': build_timestamp,
-                'subdomain': subdomain
-            }, for_pool)
+            # Ensure branch_name is set to default if empty
+            branch_name = branch_name or "main"
+
+            # Normalize GitHub repository URL
+            github_url = repo_name.rstrip('/')
+            if not github_url.startswith("http://") and not github_url.startswith("https://"):
+                github_url = f"https://github.com/{github_url}"  # Assume GitHub URL if not specified
+
+            logger.info(f"Initializing repository {github_url} with branch {branch_name}")
+
+            # Add repository cloning logic here
+            # ...existing code...
+
+            # Handle namespace conflict
+            try:
+                self._create_namespace({
+                    'namespace_name': namespace,
+                    'workspace_id': workspace_id,
+                    'build_timestamp': build_timestamp,
+                    'subdomain': subdomain
+                }, for_pool)
+            except client.exceptions.ApiException as e:
+                if e.status == 409:  # Namespace already exists
+                    logger.warning(f"Namespace {namespace} already exists, skipping creation")
+                else:
+                    raise
 
             # Create PVCs
             self._create_workspace_pvc({
@@ -796,7 +815,7 @@ if feature_exists "python"; then
     
     # Install Python with apt
     apt-get update
-    apt-get install -y python3 python3-pip python3-venv
+    apt-get install -y python3 python3-venv python3-pip
     
     # Create symbolic links
     ln -sf /usr/bin/python3 /usr/bin/python
