@@ -29,6 +29,7 @@ def configure_routes(pool_service):
 
             # Ensure pools data is JSON serializable
             if not isinstance(pools, list):
+                logger.error("Pools data is not a list")
                 raise ValueError("Pools data is not a list")
 
             return jsonify({

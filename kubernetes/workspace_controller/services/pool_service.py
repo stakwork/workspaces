@@ -13,7 +13,7 @@ import base64
 from models.pool import Pool
 from models.cleanup import CleanupStatus
 from utils.workspace_init import generate_init_script
-from .workspace_initializer import PoolWorkspaceInitializer
+from .workspace_initializer import WorkspaceInitializer
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class PoolService:
             self.workspace_domain = "SUBDOMAIN_REPLACE_ME"
             self.aws_account_id = "AWS_ACCOUNT_ID_REPLACE_ME"
 
-        self.pool_workspace_initializer = PoolWorkspaceInitializer(core_v1, apps_v1, self.aws_account_id, self.workspace_domain)
+        self.workspace_initializer = WorkspaceInitializer(core_v1, apps_v1, self.aws_account_id, self.workspace_domain)
 
     def _generate_random_subdomain(self, length=8):
         """Generate a random subdomain name"""
@@ -447,7 +447,7 @@ class PoolService:
             build_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
             # Use PoolWorkspaceInitializer to set up environment workspaces
-            self.pool_workspace_initializer.initialize_workspace(
+            self.workspace_initializer.initialize_workspace(
                 workspace_id, repo_name, branch_name, github_pat, pool_name, build_timestamp=build_timestamp
             )
 
