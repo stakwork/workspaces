@@ -4,6 +4,7 @@ import base64
 import re
 import random
 import string
+import time
 from datetime import datetime
 from kubernetes import client
 from utils.workspace_init import generate_init_script
@@ -48,22 +49,31 @@ class WorkspaceInitializer:
             # Extract just the repo name from the full URL for proper usage
             repo_short_name = repo_name.split('/')[-1] if repo_name and '/' in repo_name else repo_name
             
+            # Ensure github_urls is always a list with at least one URL
+            if repo_name:
+                github_urls = [repo_name]
+            else:
+                raise ValueError("repo_name is required to initialize a workspace")
+
+            # Initialize workspace_config with proper GitHub URLs and branches
             workspace_config = {
                 'github_branches': [branch_name] if branch_name else ["main"],
-                'github_urls': [repo_name] if repo_name else [],
-                'repo_name': repo_short_name
+                'github_urls': github_urls,
+                'repo_name': repo_short_name,
+                'branch_name': branch_name,
+                'pool_name': pool_name
             }
             
+            logger.info(f"Initialized workspace_config: {workspace_config}")
+
             # Ensure build timestamp is set
             if not build_timestamp:
                 build_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
             # Generate unique subdomain and namespace for this workspace
-            
-            subdomain = f"{self._generate_random_subdomain()}"
-            # Use workspace_domain for FQDN as it should be the actual domain
-            fqdn = f"{subdomain}.{self.workspace_domain}"
+            subdomain = self._generate_random_subdomain()
             namespace = f"workspace-{workspace_id}"
+            fqdn = f"{subdomain}.{self.workspace_domain}"
 
             # Create workspace_ids dictionary that will be used throughout the initialization
             workspace_ids = {
@@ -78,22 +88,29 @@ class WorkspaceInitializer:
 
             # Add environment variables for workspace initialization
             workspace_config['environment_variables'] = {
+                "NAMESPACE_NAME": workspace_ids['namespace_name'],  # Use from workspace_ids
                 "WORKSPACE_ID": workspace_ids['workspace_id'],
-                "REPO_NAME": workspace_config['repo_name'],  # Use the short repo name
+                "WORKSPACE_NAME": workspace_ids['workspace_id'],  # Use workspace_id as workspace name
+                "REPO_NAME": workspace_config['repo_name'],
+                "REPO_URL": workspace_config['github_urls'][0] if workspace_config['github_urls'] else "",
                 "BRANCH_NAME": workspace_config['github_branches'][0] if workspace_config['github_branches'] else "main",
                 "GITHUB_PAT": github_pat,
                 "POOL_NAME": pool_name,
                 "BUILD_TIMESTAMP": workspace_ids['build_timestamp'],
-                "FQDN": workspace_ids['fqdn'],    
+                "FQDN": workspace_ids['fqdn'],
                 "SUBDOMAIN": workspace_ids['subdomain'],
-                "WORKSPACE_DOMAIN": self.workspace_domain,  # This is the actual domain
-                "AWS_ACCOUNT_ID": self.aws_account_id,    # This is the AWS account ID
-                "USER_REPO_PATH": f"/workspaces/{workspace_config['repo_name']}"  # Use the short repo name
+                "WORKSPACE_DOMAIN": self.workspace_domain,
+                "AWS_ACCOUNT_ID": self.aws_account_id,
+                "USER_REPO_PATH": f"/workspaces/{workspace_config['repo_name']}"
             }
+
             logger.info(f"Added repo_name and environment variables to workspace_config: {workspace_config}")
+            logger.info(f"Initializing repository {repo_name} with branches {branch_name if branch_name else 'main'}")
 
-            logger.info(f"Initializing repository {repo_name} with branches {branch_name}")
-
+            # Set default branch to main if none is provided
+            if not branch_name:
+                branch_name = "main"
+                workspace_config['github_branches'] = ["main"]
         
             # Validate workspace_config lists before accessing
             if not workspace_config['github_urls']:
@@ -102,9 +119,17 @@ class WorkspaceInitializer:
             if not workspace_config.get('github_branches'):
                 workspace_config['github_branches'] = ["main"]  # Default to 'main' branch
 
-            # Correct initialization and concatenation of init_script
-            init_script = self._create_wrapper_dockerfile_script(workspace_ids['workspace_id'], workspace_config)
-            init_script += self._create_wrapper_dockerfile(workspace_ids['workspace_id'])
+            # Create workspace initialization script
+            init_script = generate_init_script(workspace_ids, workspace_config)
+
+            # Add Docker configuration scripts
+            wrapper_script = self._create_wrapper_dockerfile_script(workspace_ids, workspace_config)
+            if wrapper_script:
+                init_script += wrapper_script
+
+            dockerfile_script = self._create_wrapper_dockerfile(workspace_ids)
+            if dockerfile_script:
+                init_script += dockerfile_script
 
 
             # Validate workspace_config and repo_name
@@ -137,6 +162,25 @@ class WorkspaceInitializer:
 
             # Handle namespace conflict
             try:
+                # First try to delete the namespace if it exists
+                try:
+                    self.core_v1.delete_namespace(namespace)
+                    logger.info(f"Deleted existing namespace: {namespace}")
+                    # Wait for namespace to be fully deleted
+                    max_retries = 30
+                    while max_retries > 0:
+                        try:
+                            self.core_v1.read_namespace(namespace)
+                            time.sleep(1)
+                            max_retries -= 1
+                        except client.exceptions.ApiException as e:
+                            if e.status == 404:  # Namespace is gone
+                                break
+                except client.exceptions.ApiException as e:
+                    if e.status != 404:  # 404 means namespace didn't exist, which is fine
+                        logger.warning(f"Error deleting old namespace: {e}")
+
+                # Now create the new namespace
                 self._create_namespace({
                     'namespace_name': namespace,
                     'workspace_id': workspace_id,
@@ -146,7 +190,8 @@ class WorkspaceInitializer:
                 }, for_pool)
             except client.exceptions.ApiException as e:
                 if e.status == 409:  # Namespace already exists
-                    logger.warning(f"Namespace {namespace} already exists, skipping creation")
+                    logger.error(f"Namespace {namespace} still exists after cleanup attempt")
+                    raise
                 else:
                     raise
 
@@ -166,6 +211,8 @@ class WorkspaceInitializer:
                 'workspace_id': workspace_id
             }, github_pat)
             # Create ConfigMap early in the initialization process
+            # Create ConfigMap early in the initialization process
+            # Pass through github_urls from workspace_config
             self._create_init_script_configmap({
                 'namespace_name': namespace,
                 'workspace_id': workspace_id,
@@ -174,7 +221,9 @@ class WorkspaceInitializer:
             }, {
                 'repo_name': repo_name,
                 'branch_name': branch_name,
-                'pool_name': pool_name
+                'pool_name': pool_name,
+                'github_urls': workspace_config['github_urls'],
+                'github_branches': workspace_config['github_branches']
             })
 
             logger.info("ConfigMap created successfully.")
@@ -205,7 +254,7 @@ class WorkspaceInitializer:
             # Copy necessary resources
             self._copy_port_detector_configmap({
                 'namespace_name': namespace,
-                'workspace_id': workspace_id
+                'workspace_id': workspace_id,
             })
             self._copy_wildcard_certificate({
                 'namespace_name': namespace,
@@ -328,15 +377,18 @@ class WorkspaceInitializer:
 
     def _create_init_script_configmap(self, workspace_ids: dict, workspace_config: dict):
         """Create ConfigMap containing workspace initialization script"""
+        
+        # First create the main initialization script
         init_script = generate_init_script(workspace_ids, workspace_config)
 
-        namespace_name = workspace_ids['namespace_name']
-        repo_name = workspace_config['repo_name']
-        
+        # Add Docker configuration scripts
+        wrapper_script = self._create_wrapper_dockerfile_script(workspace_ids, workspace_config)
+        if wrapper_script:
+            init_script += wrapper_script
 
-        # Add code to create a wrapper dockerfile that uses Dockerfile as base
-        init_script += self._create_wrapper_dockerfile_script(workspace_ids, workspace_config)
-        init_script += self._create_wrapper_dockerfile(workspace_ids)
+        dockerfile_script = self._create_wrapper_dockerfile(workspace_ids)
+        if dockerfile_script:
+            init_script += dockerfile_script
 
         
         init_config_map = client.V1ConfigMap(
@@ -582,9 +634,61 @@ class WorkspaceInitializer:
     def _cleanup_failed_workspace(self, workspace_ids: dict):
         """Clean up resources for a failed workspace initialization"""
         try:
+            # Delete all deployments in the namespace first
+            try:
+                self.apps_v1.delete_collection_namespaced_deployment(
+                    workspace_ids['namespace_name'],
+                    propagation_policy="Foreground"
+                )
+            except Exception as e:
+                logger.warning(f"Error deleting deployments during cleanup: {e}")
+
+            # Delete all services
+            try:
+                self.core_v1.delete_collection_namespaced_service(
+                    workspace_ids['namespace_name']
+                )
+            except Exception as e:
+                logger.warning(f"Error deleting services during cleanup: {e}")
+
+            # Delete all configmaps
+            try:
+                self.core_v1.delete_collection_namespaced_config_map(
+                    workspace_ids['namespace_name']
+                )
+            except Exception as e:
+                logger.warning(f"Error deleting configmaps during cleanup: {e}")
+
+            # Delete all PVCs
+            try:
+                self.core_v1.delete_collection_namespaced_persistent_volume_claim(
+                    workspace_ids['namespace_name']
+                )
+            except Exception as e:
+                logger.warning(f"Error deleting PVCs during cleanup: {e}")
+
+            # Finally delete the namespace
             self.core_v1.delete_namespace(workspace_ids['namespace_name'])
+            
+            # Wait for namespace deletion to complete
+            max_retries = 30
+            while max_retries > 0:
+                try:
+                    self.core_v1.read_namespace(workspace_ids['namespace_name'])
+                    time.sleep(1)
+                    max_retries -= 1
+                except client.exceptions.ApiException as e:
+                    if e.status == 404:  # Namespace is gone
+                        break
+            
+            if max_retries == 0:
+                logger.error(f"Timeout waiting for namespace {workspace_ids['namespace_name']} to be deleted")
+            else:
+                logger.info(f"Successfully cleaned up workspace: {workspace_ids['namespace_name']}")
+                
         except Exception as e:
-            logger.error(f"Error cleaning up failed workspace: {e}")
+            logger.error(f"Error during workspace cleanup: {e}")
+            # Don't raise, as this is called during error handling
 
     def _generate_random_password(self, length: int = 12) -> str:
         """Generate a random password"""
