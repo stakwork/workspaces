@@ -42,10 +42,8 @@ class WorkspaceInitializer:
             if not github_url.startswith("http://") and not github_url.startswith("https://"):
                 github_url = f"https://github.com/{github_url}"  # Assume GitHub URL if not specified
 
-            # Ensure github_branches is set to default if empty
-            github_branches = [branch_name] if branch_name else ["main"]
 
-            logger.info(f"Initializing repository {github_url} with branches {github_branches}")
+            logger.info(f"Initializing repository {github_url} with branches {branch_name}")
 
             # Add repository cloning logic here
             # ...existing code...
