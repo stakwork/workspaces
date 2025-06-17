@@ -7,6 +7,12 @@ from utils.workspace_init import generate_init_script
 
 logger = logging.getLogger(__name__)
 
+# Initialize workspace_config with default values at the top of the file
+workspace_config = {
+    'github_branches': ['main'],
+    'github_urls': []
+}
+
 class WorkspaceInitializer:
     """Service for initializing workspaces with common functionality for both regular workspaces and pool VMs"""
     
@@ -47,6 +53,28 @@ class WorkspaceInitializer:
 
             # Add repository cloning logic here
             # ...existing code...
+
+            init_script += f"""
+    # Check if the first repository actually got cloned
+    if [ ! -d "$USER_REPO_PATH" ]; then
+        echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
+        cd /workspaces
+        
+        # Get the branch for the first repository
+        BRANCH="{workspace_config['github_branches'][0] if workspace_config['github_branches'] and workspace_config['github_branches'][0] else ''}"
+        
+        if [ ! -z "$BRANCH" ]; then
+            echo "Cloning with specific branch: $BRANCH"
+            git clone -b $BRANCH {workspace_config['github_urls'][0]} {repo_name}
+        else
+            echo "Cloning with default branch"
+            git clone {workspace_config['github_urls'][0]} {repo_name}
+        fi
+
+        git config --global --add safe.directory /workspaces/{repo_name}
+    fi
+    """
+ 
 
             # Handle namespace conflict
             try:
