@@ -61,7 +61,10 @@ class WorkspaceInitializer:
                 'github_urls': github_urls,
                 'repo_name': repo_short_name,
                 'branch_name': branch_name,
-                'pool_name': pool_name
+                'pool_name': pool_name,
+                'use_custom_image_url': False,
+                'custom_image_url': None,
+                'custom_wrapper_image_url': None,
             }
             
             logger.info(f"Initialized workspace_config: {workspace_config}")
@@ -223,7 +226,10 @@ class WorkspaceInitializer:
                 'branch_name': branch_name,
                 'pool_name': pool_name,
                 'github_urls': workspace_config['github_urls'],
-                'github_branches': workspace_config['github_branches']
+                'github_branches': workspace_config['github_branches'],
+                'use_custom_image_url': workspace_config.get('use_custom_image_url', False),
+                'custom_image_url': workspace_config.get('custom_image_url', None),
+                'custom_wrapper_image_url': workspace_config.get('custom_wrapper_image_url', None)
             })
 
             logger.info("ConfigMap created successfully.")

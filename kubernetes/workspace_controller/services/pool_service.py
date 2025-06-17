@@ -446,7 +446,7 @@ class PoolService:
             # Generate build timestamp
             build_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
-            # Use WorkspaceInitializer to set up the workspace
+            # Use WorkspaceInitializer to set up the workspacen
             success = self.workspace_initializer.initialize_workspace(
                 workspace_id, repo_name, branch_name, github_pat, pool_name, build_timestamp=build_timestamp
             )

@@ -15,128 +15,154 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
     if not workspace_ids.get('namespace_name'):
         raise ValueError("namespace_name is required in workspace_ids")
     
+    repo_url = workspace_config.get('github_urls', [""])[0]
+    repo_name = repo_url.split('/')[-1].replace('.git', '')
+    branch = workspace_config.get('github_branches', ["main"])[0]
+    
+    base_script = _generate_workspace_script(workspace_ids, workspace_config)
     init_script = [
-        "#!/bin/bash",
-        "set -e",
-        
-        # Required packages for devcontainer setup
-        'echo "Installing required packages for devcontainer support..."',
-        'apt-get update && apt-get install -y jq git-lfs >/dev/null 2>&1 || true',
-        
-        # Setup error handling and logging with more detail
-        'function handle_error() {',
-        '    local exit_code=$?',
-        '    local line_no=$1',
-        '    local command=$(sed -n "${line_no}p" "$0")',
-        '    echo "Error occurred in script at line $line_no: \'$command\' exited with status $exit_code"',
-        '    echo "Failed" > /workspaces/.init-status',
-        '    exit $exit_code',
-        '}',
-        'trap \'handle_error ${LINENO}\' ERR',
-        
-        # Setup status reporting
-        'function update_status() {',
-        '    echo "$1" > /workspaces/.init-status',
-        '    echo "[$(date)] Status: $1" >> /workspaces/logs/init.log',
-        '}',
-        
-        # Create logging directory with timestamps
-        "mkdir -p /workspaces/logs",
-        "LOGFILE=/workspaces/logs/init.log",
-        "exec 1> >(tee $LOGFILE)",
-        "exec 2>&1",
-        
-        # Initialize status
-        'update_status "Initializing"',
-        "echo '[$(date)] Starting workspace initialization...'",
-        
-        # Wait for feature installation to complete
-        'echo "Waiting for feature installation to complete..."',
-        'FEATURE_TIMEOUT=300',
-        'while [ ! -f /workspaces/.features-installed ] && [ $FEATURE_TIMEOUT -gt 0 ]; do',
-        '    sleep 1',
-        '    FEATURE_TIMEOUT=$((FEATURE_TIMEOUT - 1))',
-        '    if [ $((FEATURE_TIMEOUT % 10)) -eq 0 ]; then',
-        '        echo "Still waiting for feature installation... ${FEATURE_TIMEOUT}s remaining"',
-        '    fi',
-        'done',
-        '',
-        'if [ ! -f /workspaces/.features-installed ]; then',
-        '    echo "ERROR: Feature installation timed out"',
-        '    update_status "feature_install_timeout"',
-        '    exit 1',
-        'fi',
-        '',
-        'echo "Feature installation completed, proceeding with workspace setup"',
-        
-        # Save workspace IDs and config
-        f"echo '{json.dumps(workspace_ids)}' > /workspaces/.workspace-ids",
-        f"echo '{json.dumps(workspace_config)}' > /workspaces/.workspace-config",
-        
-        # Create working directory with proper permissions
-        "mkdir -p workspaces",
-        "cd workspaces",
-        "chmod 755 /workspaces/",
+    f"""
+        # Create directory for wrapper Dockerfile and user Dockerfile
+        mkdir -p /workspaces/
+        cd /workspaces/
 
-        # Function to clone/update repos with retry
-        'function clone_repo() {',
-        '    local url="$1"',
-        '    local branch="$2"',
-        '    local retries=3',
-        '    local repo_name=$(basename "$url" .git)',
-        '    local clone_opts="--recurse-submodules"',
-        '    ',
-        '    echo "[$(date)] Cloning repository $repo_name from $url${branch:+ branch $branch}..."',
-        '    update_status "cloning_repository"',
-        '    ',
-        '    # Check if repo already exists and is valid',
-        '    if [ -d "$repo_name/.git" ]; then',
-        '        echo "Repository exists, checking status..."',
-        '        cd "$repo_name"',
-        '        if git status &>/dev/null; then',
-        '            echo "Repository is valid, updating..."',
-        '            git fetch origin',
-        '            if [ ! -z "$branch" ]; then',
-        '                git reset --hard "origin/$branch"',
-        '            else',
-        '                git reset --hard origin/HEAD',
-        '            fi',
-        '            git submodule update --init --recursive',
-        '            cd ..',
-        '            return 0',
-        '        fi',
-        '        cd ..',
-        '        echo "Repository is invalid, removing..."',
-        '        rm -rf "$repo_name"',
-        '    fi',
+        # Locate the user's Dockerfile in their repo
+        USER_REPO_PATH="{repo_name}"
+        DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
+        DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
 
-        '    # Clone with retries',
-        '    for i in $(seq 1 $retries); do',
-        '        echo "Clone attempt $i of $retries..."',
-        '        if [ ! -z "$branch" ]; then',
-        '            clone_opts="$clone_opts -b $branch"',
-        '        fi',
-        '        if git clone $clone_opts "$url" 2>&1; then',
-        '            cd "$repo_name"',
-        '            # Setup LFS if needed',
-        '            if [ -f ".gitattributes" ] && grep -q "filter=lfs" .gitattributes; then',
-        '                echo "LFS detected, pulling LFS files..."',
-        '                git lfs pull',
-        '            fi',
-        '            cd ..',
-        '            return 0',
-        '        fi',
-        '        echo "Clone failed, retrying in 5 seconds..."',
-        '        sleep 5',
-        '    done',
-        '    echo "Failed to clone repository after $retries attempts"',
-        '    return 1',
-        '}',
+        # Debugging and validation
+        echo "DEBUG: Checking repository and Dockerfile"
+        if [ -d "$USER_REPO_PATH" ]; then
+            echo "DEBUG: Repository directory exists at $USER_REPO_PATH"
+            ls -la "$USER_REPO_PATH"
+        else
+            echo "DEBUG: ERROR - Repository directory does not exist at $USER_REPO_PATH"
+        fi
 
-        # Clone repositories
-        "echo '[$(date)] Cloning repositories...'"
+        if [ -d "$USER_REPO_PATH/.devcontainer" ]; then
+            echo "DEBUG: .devcontainer directory exists"
+            ls -la "$USER_REPO_PATH/.devcontainer"
+        else
+            echo "DEBUG: .devcontainer directory does not exist"
+        fi
+
+        if [ -f "$DOCKERFILE_PATH" ]; then
+            echo "DEBUG: Dockerfile exists at $DOCKERFILE_PATH"
+            cat "$DOCKERFILE_PATH" | head -n 10
+        else
+            echo "DEBUG: Dockerfile does not exist at $DOCKERFILE_PATH"
+        fi
+
+        if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
+            echo "DEBUG: devcontainer.json exists at $DEVCONTAINER_JSON_PATH"
+            cat "$DEVCONTAINER_JSON_PATH" | head -n 20
+        else
+            echo "DEBUG: devcontainer.json does not exist at $DEVCONTAINER_JSON_PATH"
+        fi
+
+        # Clone repository if needed
+        if [ ! -d "$USER_REPO_PATH" ]; then
+            echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
+            cd /workspaces
+
+            BRANCH="{workspace_config['github_branches'][0] if workspace_config['github_branches'] and workspace_config['github_branches'][0] else ''}"
+
+            if [ ! -z "$BRANCH" ]; then
+                echo "Cloning with specific branch: $BRANCH"
+                git clone -b $BRANCH {workspace_config['github_urls'][0]} {workspace_config['repo_name']}
+            else
+                echo "Cloning with default branch"
+                git clone {workspace_config['github_urls'][0]} {workspace_config['repo_name']}
+            fi
+
+            git config --global --add safe.directory /workspaces/{workspace_config['repo_name']}
+        fi
+
+        # Check again after potential re-cloning
+        if [ -f "$DOCKERFILE_PATH" ]; then
+            echo "Found user Dockerfile at $DOCKERFILE_PATH"
+            cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
+
+            if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
+                echo "Found devcontainer.json - processing configuration"
+                cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
+
+                if ! command -v jq &> /dev/null; then
+                    echo "Installing jq to parse devcontainer.json"
+                    apt-get update && apt-get install -y jq tmux
+                fi
+
+                EXTENSIONS=$(jq -r '.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ -z "$EXTENSIONS" ]; then
+                    EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                fi
+
+                if [ ! -z "$EXTENSIONS" ]; then
+                    echo "$EXTENSIONS" > /workspaces/.extensions-list
+                fi
+
+                SETTINGS=$(jq -r '.settings // .customizations.vscode.settings // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$SETTINGS" ]; then
+                    mkdir -p /workspaces/.vscode
+                    echo "$SETTINGS" > /workspaces/.vscode/settings.json
+                fi
+
+                FEATURES=$(jq -r '.features // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$FEATURES" ]; then
+                    echo "$FEATURES" > /workspaces/.devcontainer-features
+                fi
+
+                PORTS=$(jq -r '.forwardPorts[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$PORTS" ]; then
+                    echo "$PORTS" > /workspaces/.forward-ports
+                fi
+
+                CUSTOMIZATIONS=$(jq -r '.customizations // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$CUSTOMIZATIONS" ]; then
+                    echo "$CUSTOMIZATIONS" > /workspaces/.customizations
+                fi
+
+                ENV_VARS=$(jq -r '.containerEnv // empty | to_entries[] | "\(.key)=\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$ENV_VARS" ]; then
+                    echo "$ENV_VARS" > /workspaces/.container-env
+                fi
+
+                REMOTE_ENV_VARS=$(jq -r '.remoteEnv // empty | to_entries[] | "\(.key)=\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$REMOTE_ENV_VARS" ]; then
+                    echo "$REMOTE_ENV_VARS" > /workspaces/.remote-env
+                fi
+
+                REMOTE_USER=$(jq -r '.remoteUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                CONTAINER_USER=$(jq -r '.containerUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+
+                if [ ! -z "$REMOTE_USER" ]; then
+                    echo "REMOTE_USER=$REMOTE_USER" > /workspaces/.user-config
+                fi
+
+                if [ ! -z "$CONTAINER_USER" ]; then
+                    echo "CONTAINER_USER=$CONTAINER_USER" >> /workspaces/.user-config
+                fi
+
+                POST_CREATE_CMD=$(jq -r '.postCreateCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$POST_CREATE_CMD" ]; then
+                    echo "$POST_CREATE_CMD" > /workspaces/post-create-command.sh
+                    chmod +x /workspaces/post-create-command.sh
+                fi
+
+                POST_START_CMD=$(jq -r '.postStartCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+                if [ ! -z "$POST_START_CMD" ]; then
+                    echo "$POST_START_CMD" > /workspaces/post-start-command.sh
+                    chmod +x /workspaces/post-start-command.sh
+                fi
+            fi
+        else
+            echo "Warning: No Dockerfile found at $DOCKERFILE_PATH"
+            echo "Using default Go dev container image instead"
+            echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+        fi
+        """
     ]
-
     # Add repository cloning commands
     for url, branch in zip(
         workspace_config.get('github_urls', []), 
@@ -145,12 +171,7 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
         init_script.append(f"clone_repo '{url}' '{branch}'")
 
     init_script.extend([
-        # Workspace readiness checks
-        "echo '[$(date)] Running workspace readiness checks...'",
-        "update_status 'checking_readiness'",
-        "ERROR_COUNT=0",
-
-        # Function to handle devcontainer setup
+        # Function to handle devcontainer setup and feature installation
         'function setup_devcontainer() {',
         '    local dir="$1"',
         '    echo "Setting up devcontainer in $dir..."',
@@ -165,6 +186,11 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
         '        if jq -e .features "$config_file" >/dev/null 2>&1; then',
         '            echo "Setting up devcontainer features..."',
         '            jq -r .features "$config_file" > /workspaces/.devcontainer-features',
+        '            # Install features immediately after finding them',
+        '            update_status "installing_features"',
+        '            echo "Installing devcontainer features..."',
+        '            # Signal feature installation completion',
+        '            touch /workspaces/.features-installed',
         '        fi',
         '',
         '        # Parse and apply extensions',
@@ -208,6 +234,11 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
         "    cd \"$d\"",
         "    # Setup devcontainer first",
         "    setup_devcontainer \"$(pwd)\"",
+        "    # Create an empty features file if none exists to prevent waiting",
+        "    if [ ! -f /workspaces/.devcontainer-features ]; then",
+        "        echo '{}' > /workspaces/.devcontainer-features",
+        "        touch /workspaces/.features-installed",
+        "    fi",
         "",
         "    # Check node_modules",
         "    if [ -f 'package.json' ] && [ ! -d 'node_modules' ]; then",
@@ -221,14 +252,6 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
         "        python3 -m pip install -r requirements.txt --quiet || echo \"Warning: pip install failed in $d\"",
         "        ((ERROR_COUNT++))",
         "    fi",
-        "    # Check Git LFS files",
-        "    if [ -f '.gitattributes' ] && grep -q \"filter=lfs\" .gitattributes; then",
-        "        if ! git lfs ls-files | grep -q .; then",
-        "            echo \"Warning: LFS files not properly pulled in $d\"",
-        "            git lfs pull || echo \"Warning: git lfs pull failed in $d\"",
-        "            ((ERROR_COUNT++))",
-        "        fi",
-        "    fi",
         "    cd ..",
         "done",
 
@@ -240,24 +263,6 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
         'if [ -f /workspaces/.devcontainer-features ]; then',
         '    if ! jq . /workspaces/.devcontainer-features >/dev/null 2>&1; then',
         '        echo "Warning: Invalid devcontainer features configuration"',
-        '        ((VALIDATION_FAILED++))',
-        '    fi',
-        'fi',
-        '',
-        '# Check if all required VS Code extensions are available',
-        'if [ -f /workspaces/.extensions-list ]; then',
-        '    while IFS= read -r ext; do',
-        '        if ! code-server --list-extensions | grep -q "$ext"; then',
-        '            echo "Warning: Extension $ext not properly installed"',
-        '            ((VALIDATION_FAILED++))',
-        '        fi',
-        '    done < /workspaces/.extensions-list',
-        'fi',
-        '',
-        '# Check environment variables',
-        'if [ -f /workspaces/.container-env ]; then',
-        '    if [ ! -f ~/.config/code-server/env ]; then',
-        '        echo "Warning: Environment variables not properly configured"',
         '        ((VALIDATION_FAILED++))',
         '    fi',
         'fi',
@@ -275,21 +280,12 @@ def generate_init_script(workspace_ids: dict, workspace_config: dict) -> str:
         '# Mark initialization as complete',
         'touch /workspaces/.pool-workspace-initialized',
         'echo "[$(date)] Initialization finished"',
-        '',
-        '# Additional workspace metadata',
-        'cat > /workspaces/.workspace-metadata << EOF',
-        '{',
-        '  "lastInitialized": "$(date -Iseconds)",',
-        '  "initializationStatus": "$(cat /workspaces/.init-status)",',
-        '  "features": $([ -f /workspaces/.devcontainer-features ] && cat /workspaces/.devcontainer-features || echo "{}")',
-        '}',
-        'EOF'
     ])
 
     return "\n".join(init_script)
 
 
-def _generate_init_script(workspace_ids, workspace_config):
+def _generate_workspace_script(workspace_ids, workspace_config):
     """Generate the initialization bash script"""
     # Start with base script
     init_script = """#!/bin/bash
