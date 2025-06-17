@@ -1,0 +1,75 @@
+{
+    "RouteTables": [
+        {
+            "Associations": [
+                {
+                    "Main": false,
+                    "RouteTableAssociationId": "rtbassoc-0a3dac8c664d33818",
+                    "RouteTableId": "rtb-0a87c2604a6013a31",
+                    "SubnetId": "subnet-0af0010651d2a244d",
+                    "AssociationState": {
+                        "State": "associated"
+                    }
+                },
+                {
+                    "Main": false,
+                    "RouteTableAssociationId": "rtbassoc-0441683eb553d1333",
+                    "RouteTableId": "rtb-0a87c2604a6013a31",
+                    "SubnetId": "subnet-0901d859f6b9a27e8",
+                    "AssociationState": {
+                        "State": "associated"
+                    }
+                }
+            ],
+            "PropagatingVgws": [],
+            "RouteTableId": "rtb-0a87c2604a6013a31",
+            "Routes": [
+                {
+                    "DestinationCidrBlock": "10.0.0.0/16",
+                    "GatewayId": "local",
+                    "Origin": "CreateRouteTable",
+                    "State": "active"
+                },
+                {
+                    "DestinationCidrBlock": "0.0.0.0/0",
+                    "NatGatewayId": "nat-03b71758173946bee",
+                    "Origin": "CreateRoute",
+                    "State": "blackhole"
+                }
+            ],
+            "Tags": [
+                {
+                    "Key": "Name",
+                    "Value": "workspace-private-rt-1"
+                }
+            ],
+            "VpcId": "vpc-0671985eedc3f3513",
+            "OwnerId": "659092511241"
+        },
+        {
+            "Associations": [
+                {
+                    "Main": true,
+                    "RouteTableAssociationId": "rtbassoc-027589b45538ffa0d",
+                    "RouteTableId": "rtb-00f0e29e10181d15b",
+                    "AssociationState": {
+                        "State": "associated"
+                    }
+                }
+            ],
+            "PropagatingVgws": [],
+            "RouteTableId": "rtb-00f0e29e10181d15b",
+            "Routes": [
+                {
+                    "DestinationCidrBlock": "10.0.0.0/16",
+                    "GatewayId": "local",
+                    "Origin": "CreateRouteTable",
+                    "State": "active"
+                }
+            ],
+            "Tags": [],
+            "VpcId": "vpc-0671985eedc3f3513",
+            "OwnerId": "659092511241"
+        }
+    ]
+}

@@ -26,13 +26,25 @@ def configure_routes(pool_service):
             logger.info("Getting list of pools")
             check_service()
             pools = service.list_pools()
-            
+
+            # Ensure pools data is JSON serializable
+            if not isinstance(pools, list):
+                raise ValueError("Pools data is not a list")
+
             return jsonify({
                 "status": "success",
                 "pools": pools if pools else [],
                 "message": "Pools retrieved successfully"
             })
-            
+
+        except ValueError as ve:
+            logger.error(f"ValueError in list_pools: {str(ve)}", exc_info=True)
+            return jsonify({
+                "status": "error",
+                "error": str(ve),
+                "message": "Invalid data format for pools",
+                "pools": []
+            }), 500
         except Exception as e:
             logger.error(f"Error in list_pools: {str(e)}", exc_info=True)
             return jsonify({

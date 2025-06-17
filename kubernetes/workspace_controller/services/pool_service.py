@@ -13,6 +13,7 @@ import base64
 from models.pool import Pool
 from models.cleanup import CleanupStatus
 from utils.workspace_init import generate_init_script
+from .workspace_initializer import PoolWorkspaceInitializer
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +28,19 @@ class PoolService:
         self.cleanup_status = CleanupStatus()
         self.monitor_thread = Thread(target=self._monitor_pools, daemon=True)
         self.monitor_thread.start()
-        
+
         # Read workspace configuration from ConfigMap
         try:
             config_map = self.core_v1.read_namespaced_config_map("workspace-config", "workspace-system")
             self.workspace_domain = config_map.data.get("workspace-domain", "SUBDOMAIN_REPLACE_ME")
+            self.aws_account_id = config_map.data.get("aws-account-id", "AWS_ACCOUNT_ID_REPLACE_ME")
             logger.info(f"Using workspace domain: {self.workspace_domain}")
         except Exception as e:
             logger.error(f"Error reading workspace config: {e}")
             self.workspace_domain = "SUBDOMAIN_REPLACE_ME"
+            self.aws_account_id = "AWS_ACCOUNT_ID_REPLACE_ME"
+
+        self.pool_workspace_initializer = PoolWorkspaceInitializer(core_v1, apps_v1, self.aws_account_id, self.workspace_domain)
 
     def _generate_random_subdomain(self, length=8):
         """Generate a random subdomain name"""
@@ -436,11 +441,48 @@ class PoolService:
     
     def _create_workspace(self, workspace_id: str, repo_name: str, branch_name: str, 
                          github_pat: str, pool_name: str) -> bool:
-        """Create a new workspace in Kubernetes"""
+        """Create a new workspace in Kubernetes with enhanced initialization tracking"""
         try:
+            # Generate build timestamp
+            build_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+            # Use PoolWorkspaceInitializer to set up environment workspaces
+            self.pool_workspace_initializer.initialize_workspace(
+                workspace_id, repo_name, branch_name, github_pat, pool_name, build_timestamp=build_timestamp
+            )
+
+            # Create ConfigMap for feature installation script
+            feature_script_cm = client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(
+                    name="feature-install",
+                    namespace=f"workspace-{workspace_id}",
+                    labels={"app": "workspace"}
+                ),
+                data={
+                    "install-features.sh": ""
+                }
+            )
+
             # Generate workspace identifiers
             subdomain = self._generate_random_subdomain()
             namespace = f"workspace-{workspace_id}"
+            
+            # Create initialization status ConfigMap
+            init_status_cm = client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(
+                    name="workspace-init-status",
+                    namespace=namespace
+                ),
+                data={
+                    'status': json.dumps({
+                        'phase': 'creating',
+                        'start_time': datetime.now().isoformat(),
+                        'pool_name': pool_name,
+                        'workspace_id': workspace_id,
+                        'last_status': 'Initializing workspace'
+                    })
+                }
+            )
             fqdn = f"{subdomain}.{self.workspace_domain}"
             password = self._random_password()
             
@@ -451,14 +493,50 @@ class PoolService:
                         name=namespace,
                         labels={
                             "workspace-id": workspace_id,
-                            "pool": pool_name,  # Use this for pool association
-                            "app": "workspace"
+                            "pool": pool_name,
+                            "app": "workspace",
+                            "initialization": "in-progress"
                         }
                     )
                 )
             )
             
-            # Create registry-storage PVC
+            # Create feature installation script ConfigMap
+            self.core_v1.create_namespaced_config_map(namespace, feature_script_cm)
+
+            # Create initialization status ConfigMap
+            self.core_v1.create_namespaced_config_map(
+                namespace=namespace,
+                body=init_status_cm
+            )
+            
+            # Normalize GitHub repository URL
+            github_url = repo_name
+            if not github_url.startswith(("http://", "https://")):
+                if github_url.startswith("github.com/"):
+                    github_url = f"https://{github_url}"
+                else:
+                    github_url = f"https://github.com/{github_url}"
+
+            # Create workspace config with normalized URL and branch
+            workspace_config = {
+                'github_urls': [github_url],
+                'github_branches': [branch_name if branch_name else "main"],  # Use main as default if no branch specified
+                'github_pat': github_pat,
+                'use_custom_image_url': False
+            }
+
+            # Generate workspace IDs for init script
+            workspace_ids = {
+                'namespace_name': namespace,
+                'build_timestamp': datetime.now().strftime('%Y%m%d%H%M%S'),
+                'workspace_id': workspace_id
+            }
+            
+            # Generate the initialization script
+            init_script = generate_init_script(workspace_ids, workspace_config)
+
+            # Create PersistentVolumeClaim for workspace storage
             pvc = client.V1PersistentVolumeClaim(
                 metadata=client.V1ObjectMeta(
                     name="registry-storage",
@@ -473,45 +551,10 @@ class PoolService:
                     storage_class_name="efs-sc"
                 )
             )
-            self.core_v1.create_namespaced_persistent_volume_claim(namespace, pvc)
-            logger.info(f"Created registry-storage PVC in namespace: {namespace}")
-            
-            # Create workspace info ConfigMap
-            workspace_info = {
-                "id": workspace_id,
-                "repo_name": repo_name,
-                "branch_name": branch_name,
-                "subdomain": subdomain,
-                "fqdn": fqdn,
-                "password": password,
-                "pool_name": pool_name
-            }
-            
-            info_config_map = client.V1ConfigMap(
-                metadata=client.V1ObjectMeta(
-                    name="workspace-info",
-                    namespace=namespace,
-                    labels={"app": "workspace-info"}
-                ),
-                data={"info": json.dumps(workspace_info)}
+            self.core_v1.create_namespaced_persistent_volume_claim(
+                namespace=namespace,
+                body=pvc
             )
-            self.core_v1.create_namespaced_config_map(namespace, info_config_map)
-
-            # Generate init script using our utility function
-            workspace_ids = {
-                'namespace_name': namespace,
-                'build_timestamp': datetime.now().strftime('%Y%m%d%H%M%S'),
-                'workspace_id': workspace_id
-            }
-            workspace_config = {
-                'github_urls': [repo_name if repo_name.startswith('http') else f"https://github.com/{repo_name}"],
-                'github_branches': [branch_name if branch_name else "main"],  # Use main as default if no branch specified
-                'github_pat': github_pat,
-                'use_custom_image_url': False  
-            }
-            
-            # Generate the initialization script using the imported function
-            init_script = generate_init_script(workspace_ids, workspace_config)
 
             # Create workspace initialization script ConfigMap            
             init_config_map = client.V1ConfigMap(
@@ -576,10 +619,15 @@ class PoolService:
                         ),
                         spec=client.V1PodSpec(
                             init_containers=[
+                                # Feature installation container
                                 client.V1Container(
-                                    name="init-workspace",
+                                    name="feature-installer",
                                     image="buildpack-deps:22.04-scm",
-                                    command=["/bin/bash", "/scripts/init.sh"],
+                                    command=["/bin/bash", "/scripts/features/install-features.sh"],
+                                    env=[
+                                        client.V1EnvVar(name="HOME", value="/root"),
+                                        client.V1EnvVar(name="USER", value="root")
+                                    ],
                                     volume_mounts=[
                                         client.V1VolumeMount(
                                             name="registry-storage",
@@ -587,11 +635,25 @@ class PoolService:
                                             sub_path="workspaces"
                                         ),
                                         client.V1VolumeMount(
-                                            name="init-script",
-                                            mount_path="/scripts"
+                                            name="feature-script",
+                                            mount_path="/scripts/features",
+                                            read_only=True
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="registry-storage",
+                                            mount_path="/root",
+                                            sub_path="home"
                                         )
-                                    ],
+                                    ]
+                                ),
+                                # Workspace initialization container
+                                client.V1Container(
+                                    name="init-workspace",
+                                    image="buildpack-deps:22.04-scm",
+                                    command=["/bin/bash", "/scripts/init.sh"],
                                     env=[
+                                        client.V1EnvVar(name="HOME", value="/root"),
+                                        client.V1EnvVar(name="USER", value="root"),
                                         client.V1EnvVar(
                                             name="GITHUB_TOKEN",
                                             value_from=client.V1EnvVarSource(
@@ -601,6 +663,27 @@ class PoolService:
                                                     optional=True
                                                 )
                                             )
+                                        )
+                                    ],
+                                    volume_mounts=[
+                                        client.V1VolumeMount(
+                                            name="registry-storage",
+                                            mount_path="/workspaces",
+                                            sub_path="workspaces"
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="init-script",
+                                            mount_path="/scripts"
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="feature-script",
+                                            mount_path="/scripts/features",
+                                            read_only=True
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="registry-storage",
+                                            mount_path="/root",
+                                            sub_path="home"
                                         )
                                     ]
                                 )
@@ -651,12 +734,22 @@ class PoolService:
                                         client.V1VolumeMount(
                                             name="docker-sock",
                                             mount_path="/var/run"
+                                        ),
+                                        client.V1VolumeMount(
+                                            name="feature-script",
+                                            mount_path="/scripts/features",
+                                            read_only=True
                                         )
                                     ],
                                     lifecycle=client.V1Lifecycle(
                                         post_start=client.V1LifecycleHandler(
                                             _exec=client.V1ExecAction(
                                                 command=self._create_post_start_command()
+                                            )
+                                        ),
+                                        pre_stop=client.V1LifecycleHandler(
+                                            _exec=client.V1ExecAction(
+                                                command=["/bin/sh", "-c", "echo 'stopping' > /workspaces/.pool-init-status"]
                                             )
                                         )
                                     ),
@@ -689,6 +782,13 @@ class PoolService:
                                 client.V1Volume(
                                     name="docker-sock",
                                     empty_dir={}
+                                ),
+                                client.V1Volume(
+                                    name="feature-script",
+                                    config_map=client.V1ConfigMapVolumeSource(
+                                        name="feature-install",
+                                        default_mode=0o755
+                                    )
                                 )
                             ]
                         )
@@ -778,19 +878,64 @@ class PoolService:
                 logger.error(f"Error cleaning up workspace {workspace_id}: {e}")
                 # Continue with other workspaces
     
-    def _check_workspace_health(self, workspace_id: str) -> bool:
-        """Check if a workspace is healthy"""
+    def _check_workspace_health(self, workspace_id: str) -> tuple[bool, str]:
+        """Check if a workspace is healthy and return status details"""
         try:
             ns_name = f"workspace-{workspace_id}"
+            
+            # Check initialization status
+            try:
+                init_status = self.core_v1.read_namespaced_config_map(
+                    name="workspace-init-status",
+                    namespace=ns_name
+                )
+                status_data = json.loads(init_status.data.get('status', '{}'))
+                if status_data.get('phase') == 'failed':
+                    return False, f"Initialization failed: {status_data.get('last_status', 'Unknown error')}"
+            except client.exceptions.ApiException as e:
+                if e.status != 404:  # Ignore if ConfigMap doesn't exist
+                    logger.warning(f"Error reading init status for {workspace_id}: {e}")
+            
+            # Check deployment status
             deployment = self.apps_v1.read_namespaced_deployment_status(
                 name="workspace",
                 namespace=ns_name
             )
             
-            return (
-                deployment.status.available_replicas == 1 and
-                deployment.status.ready_replicas == 1
+            # Check init container status
+            pod_list = self.core_v1.list_namespaced_pod(
+                namespace=ns_name,
+                label_selector="app=workspace"
             )
+            
+            if not pod_list.items:
+                return False, "No pods found for workspace"
+                
+            pod = pod_list.items[0]  # Get the first pod
+            init_status = "pending"
+            
+            if pod.status.init_container_statuses:
+                init_container = pod.status.init_container_statuses[0]
+                if init_container.state.waiting:
+                    return False, f"Init container waiting: {init_container.state.waiting.reason}"
+                elif init_container.state.terminated:
+                    if init_container.state.terminated.exit_code != 0:
+                        return False, f"Init container failed: {init_container.state.terminated.reason}"
+                    init_status = "completed"
+            
+            # Check main container and deployment status
+            is_healthy = (
+                deployment.status.available_replicas == 1 and
+                deployment.status.ready_replicas == 1 and
+                init_status == "completed"
+            )
+            
+            if not is_healthy:
+                if deployment.status.conditions:
+                    return False, deployment.status.conditions[-1].message or "Deployment not ready"
+                return False, "Deployment not ready"
+                
+            return True, "Workspace is healthy"
             
         except Exception as e:
             logger.error(f"Error checking workspace {workspace_id} health: {e}")
@@ -811,24 +956,22 @@ class PoolService:
             pool.branch_name = branch_name
             if github_pat:
                 pool.github_pat = github_pat
-            
+
             # If name changed, update the key in self.pools
             if original_name != new_name:
                 # Update pool name
                 pool.name = new_name
-                
+
                 # Update all workspace namespace labels
                 try:
-                    # Using the same pool= label selector as used in _create_workspace and _count_pool_workspaces
                     namespaces = self.core_v1.list_namespace(
                         label_selector=f"pool={original_name}"
                     )
                     for ns in namespaces.items:
-                        # Update namespace labels with new pool name
                         patch = {
                             "metadata": {
                                 "labels": {
-                                    "pool": new_name  # Match the label key used in _create_workspace
+                                    "pool": new_name
                                 }
                             }
                         }
@@ -839,7 +982,7 @@ class PoolService:
                 except Exception as e:
                     logger.error(f"Error updating workspace labels: {e}")
                     return False
-                
+
                 # Update pools dictionary
                 self.pools[new_name] = pool
                 del self.pools[original_name]
@@ -853,6 +996,11 @@ class PoolService:
                     name=config_map_name,
                     namespace="workspace-system"
                 )
+
+                # Restore workspace_ids and used_workspace_ids from ConfigMap
+                status_data = json.loads(config_map.data.get('status', '{}'))
+                pool.workspace_ids = set(status_data.get('workspace_ids', []))
+                pool.used_workspace_ids = set(status_data.get('used_workspace_ids', []))
             except Exception as e:
                 logger.error(f"Error reading ConfigMap: {e}")
                 return False
@@ -864,20 +1012,18 @@ class PoolService:
                 "repo_name": repo_name,
                 "branch_name": branch_name,
                 "last_check": datetime.now().isoformat(),
-                "is_healthy": True,  # Reset health status after update
+                "is_healthy": True,
                 "workspace_count": len(pool.workspace_ids),
                 "status_message": "Pool updated successfully"
             }
 
-            # If name changed, create new ConfigMap and delete old one
             if original_name != new_name:
-                # Create new ConfigMap - match the format used in _update_pool_status
                 new_config_map = client.V1ConfigMap(
                     metadata=client.V1ObjectMeta(
                         name=f"pool-{new_name}",
                         namespace="workspace-system"
                     ),
-                    data={'status': json.dumps(pool_data)}  # Match the data key used in _update_pool_status
+                    data={'status': json.dumps(pool_data)}
                 )
 
                 try:
@@ -885,7 +1031,6 @@ class PoolService:
                         namespace="workspace-system",
                         body=new_config_map
                     )
-                    # Delete old ConfigMap
                     self.core_v1.delete_namespaced_config_map(
                         name=config_map_name,
                         namespace="workspace-system"
@@ -894,7 +1039,6 @@ class PoolService:
                     logger.error(f"Error updating ConfigMaps: {e}")
                     return False
             else:
-                # Update existing ConfigMap
                 config_map.data["config"] = json.dumps(pool_data)
                 try:
                     self.core_v1.replace_namespaced_config_map(
@@ -911,66 +1055,43 @@ class PoolService:
                 old_secret_name = f"pool-{original_name}-github"
                 new_secret_name = f"pool-{new_name}-github"
                 secret_data = {"github_pat": base64.b64encode(github_pat.encode()).decode()}
-                
+
                 try:
-                    # First try to update existing secret
-                    try:
-                        # Handle name change - create new secret and delete old one
-                        if original_name != new_name:
-                            # Create new secret
-                            secret = client.V1Secret(
-                                metadata=client.V1ObjectMeta(
-                                    name=new_secret_name,
-                                    namespace="workspace-system"
-                                ),
-                                data=secret_data
-                            )
-                            self.core_v1.create_namespaced_secret(
-                                namespace="workspace-system",
-                                body=secret
-                            )
-                            # Delete old secret
-                            try:
-                                self.core_v1.delete_namespaced_secret(
-                                    name=old_secret_name,
-                                    namespace="workspace-system"
-                                )
-                            except client.exceptions.ApiException as e:
-                                if e.status != 404:  # Ignore if old secret doesn't exist
-                                    raise
-                        else:
-                            # Just update existing secret
-                            existing_secret = self.core_v1.read_namespaced_secret(
+                    if original_name != new_name:
+                        secret = client.V1Secret(
+                            metadata=client.V1ObjectMeta(
+                                name=new_secret_name,
+                                namespace="workspace-system"
+                            ),
+                            data=secret_data
+                        )
+                        self.core_v1.create_namespaced_secret(
+                            namespace="workspace-system",
+                            body=secret
+                        )
+                        try:
+                            self.core_v1.delete_namespaced_secret(
                                 name=old_secret_name,
                                 namespace="workspace-system"
                             )
-                            existing_secret.data = secret_data
-                            self.core_v1.replace_namespaced_secret(
-                                name=old_secret_name,
-                                namespace="workspace-system",
-                                body=existing_secret
-                            )
-                    except client.exceptions.ApiException as e:
-                        if e.status == 404:
-                            # Create new secret if it doesn't exist
-                            secret = client.V1Secret(
-                                metadata=client.V1ObjectMeta(
-                                    name=new_secret_name,
-                                    namespace="workspace-system"
-                                ),
-                                data=secret_data
-                            )
-                            self.core_v1.create_namespaced_secret(
-                                namespace="workspace-system",
-                                body=secret
-                            )
-                        else:
-                            raise
+                        except client.exceptions.ApiException as e:
+                            if e.status != 404:
+                                raise
+                    else:
+                        existing_secret = self.core_v1.read_namespaced_secret(
+                            name=old_secret_name,
+                            namespace="workspace-system"
+                        )
+                        existing_secret.data = secret_data
+                        self.core_v1.replace_namespaced_secret(
+                            name=old_secret_name,
+                            namespace="workspace-system",
+                            body=existing_secret
+                        )
                 except Exception as e:
                     logger.error(f"Error updating GitHub PAT secret: {e}")
                     return False
 
-            # Update pool status
             self._update_pool_status(pool)
 
             return True
@@ -1184,8 +1305,13 @@ class PoolService:
             
             # Function to update status
             "update_status() {",
-            "    echo \"$1\" > $STATUS_FILE",
-            "    echo \"[$(date)] $1\"",
+            "    local status=$1",
+            "    echo \"$status\" > $STATUS_FILE",
+            "    echo \"[$(date)] $status\"",
+            "    # Update initialization status ConfigMap",
+            "    if [ -n \"$status\" ]; then",
+            "        kubectl patch configmap workspace-init-status -n $NAMESPACE -p \"{\\\"data\\\":{\\\"status\\\":\\\"{\\\"phase\\\":\\\"$status\\\",\\\"last_update\\\":\\\"$(date -Iseconds)\\\",\\\"last_status\\\":\\\"$status\\\"}\\\"}}\" || true",
+            "    fi",
             "}",
 
             # Function for retrying commands
@@ -1267,8 +1393,6 @@ class PoolService:
             "        fi",
             "    done < /workspaces/.container-env",
             "    chmod 600 ~/.config/code-server/env",  # Secure the env file
-            "fi",
-            
             # Install and configure devcontainer features if any were found
             "if [ -f /workspaces/.devcontainer-features ]; then",
             "    update_status 'installing_features'",
@@ -1389,3 +1513,160 @@ class PoolService:
         except Exception as e:
             logger.error(f"Error during workspace cleanup: {e}")
             raise
+            
+    def _create_feature_installation_script(self):
+        """Generate a script for installing devcontainer features in pool VMs"""
+        return """#!/bin/bash
+    echo "No features file found, skipping feature installation"
+    exit 0
+fi
+
+# Helper function to handle errors
+handle_error() {
+    echo "Error occurred during feature installation: $1"
+    return 1  # Changed to return instead of exit to allow continuation
+}
+
+# Helper function to check if a feature exists
+feature_exists() {
+    jq -e ".$1" "$FEATURES_FILE" > /dev/null 2>&1
+}
+
+# Helper function to get feature version/options
+get_feature_option() {
+    local feature=$1
+    local option=$2
+    local default=$3
+    jq -r ".$feature.$option // \"$default\"" "$FEATURES_FILE" 2>/dev/null || echo "$default"
+}
+
+# Ensure PATH includes common binary locations
+export PATH="/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# Install common dependencies first
+apt-get update && apt-get install -y curl wget git build-essential || handle_error "Failed to install base dependencies"
+
+# Rust installation - moved earlier in the process
+if feature_exists "rust"; then
+    echo "Installing Rust..."
+    # Install Rust using rustup
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || handle_error "Failed to install Rust"
+    
+    # Source cargo environment
+    source "$HOME/.cargo/env"
+    
+    # Add cargo to PATH permanently
+    echo 'source "$HOME/.cargo/env"' >> ~/.bashrc
+    echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.profile
+    
+    # Install common Rust tools
+    rustup component add rust-analyzer || echo "Warning: Failed to install rust-analyzer"
+    rustup component add rustfmt || echo "Warning: Failed to install rustfmt"
+    rustup component add clippy || echo "Warning: Failed to install clippy"
+    
+    # Verify Rust installation
+    if ! cargo --version > /dev/null 2>&1; then
+        handle_error "Rust installation verification failed"
+    fi
+fi
+
+# Node.js installation
+if feature_exists "node"; then
+    echo "Installing Node.js..."
+    VERSION=$(get_feature_option "node" "version" "lts")
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - || handle_error "Failed to setup Node.js repo"
+    apt-get install -y nodejs || handle_error "Failed to install Node.js"
+    npm install -g yarn || echo "Warning: Failed to install yarn"
+fi
+
+# Python installation
+if feature_exists "python"; then
+    echo "Installing Python..."
+    VERSION=$(get_feature_option "python" "version" "3.10")
+    apt-get install -y python3 python3-pip python3-venv || handle_error "Failed to install Python"
+    if [ "$(get_feature_option "python" "installJupyter" "false")" = "true" ]; then
+        pip3 install jupyter notebook || echo "Warning: Failed to install Jupyter"
+    fi
+fi
+
+# Go installation
+if feature_exists "go"; then
+    echo "Installing Go..."
+    VERSION=$(get_feature_option "go" "version" "latest")
+    if [ "$VERSION" = "latest" ]; then
+        VERSION=$(curl -s https://go.dev/VERSION?m=text | head -n1)
+    fi
+    curl -sSL "https://golang.org/dl/$VERSION.linux-amd64.tar.gz" -o go.tar.gz
+    tar -C /usr/local -xzf go.tar.gz
+    rm go.tar.gz
+    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+fi
+
+# Java installation
+if feature_exists "java"; then
+    echo "Installing Java..."
+    VERSION=$(get_feature_option "java" "version" "17")
+    apt-get install -y openjdk-${VERSION}-jdk || handle_error "Failed to install Java"
+fi
+
+# Rust installation
+if feature_exists "rust"; then
+    echo "Installing Rust..."
+    # Install Rust using rustup
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || handle_error "Failed to install Rust"
+    
+    # Source cargo environment
+    source "$HOME/.cargo/env"
+    
+    # Add cargo to PATH permanently
+    echo 'source "$HOME/.cargo/env"' >> ~/.bashrc
+    echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.profile
+    
+    # Install common Rust tools
+    rustup component add rust-analyzer || echo "Warning: Failed to install rust-analyzer"
+    rustup component add rustfmt || echo "Warning: Failed to install rustfmt"
+    rustup component add clippy || echo "Warning: Failed to install clippy"
+    
+    # Verify Rust installation
+    if ! cargo --version > /dev/null 2>&1; then
+        handle_error "Rust installation verification failed"
+    fi
+fi
+
+# Docker feature (if not already installed by post-start script)
+if feature_exists "docker" || feature_exists "docker-in-docker"; then
+    if ! command -v docker &> /dev/null; then
+        echo "Installing Docker..."
+        curl -fsSL https://get.docker.com | sh || handle_error "Failed to install Docker"
+        usermod -aG docker $USER || echo "Warning: Failed to add user to docker group"
+    fi
+fi
+
+# Azure CLI
+if feature_exists "azure-cli"; then
+    echo "Installing Azure CLI..."
+    curl -sL https://aka.ms/InstallAzureCLIDeb | bash || handle_error "Failed to install Azure CLI"
+fi
+
+# AWS CLI
+if feature_exists "aws-cli"; then
+    echo "Installing AWS CLI..."
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip -q awscliv2.zip
+    ./aws/install
+    rm -rf aws awscliv2.zip
+fi
+
+# Kubernetes tools
+if feature_exists "kubernetes-tools"; then
+    echo "Installing Kubernetes tools..."
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    chmod +x kubectl
+    mv kubectl /usr/local/bin/
+    
+    # Install Helm
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || echo "Warning: Failed to install Helm"
+fi
+
+echo "Feature installation completed successfully"
+"""
