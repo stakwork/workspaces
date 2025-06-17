@@ -446,22 +446,16 @@ class PoolService:
             # Generate build timestamp
             build_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
-            # Use PoolWorkspaceInitializer to set up environment workspaces
-            self.workspace_initializer.initialize_workspace(
+            # Use WorkspaceInitializer to set up the workspace
+            success = self.workspace_initializer.initialize_workspace(
                 workspace_id, repo_name, branch_name, github_pat, pool_name, build_timestamp=build_timestamp
             )
+            
+            if not success:
+                logger.error(f"Failed to initialize workspace {workspace_id}")
+                return False
 
-            # Create ConfigMap for feature installation script
-            feature_script_cm = client.V1ConfigMap(
-                metadata=client.V1ObjectMeta(
-                    name="feature-install",
-                    namespace=f"workspace-{workspace_id}",
-                    labels={"app": "workspace"}
-                ),
-                data={
-                    "install-features.sh": ""
-                }
-            )
+            return True
 
             # Generate workspace identifiers
             subdomain = self._generate_random_subdomain()
