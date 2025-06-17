@@ -4,6 +4,10 @@ import base64
 from datetime import datetime
 from kubernetes import client
 from utils.workspace_init import generate_init_script
+from services.pool_service import (
+    _create_wrapper_dockerfile_script,
+    _create_wrapper_dockerfile
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +56,8 @@ class WorkspaceInitializer:
             logger.info(f"Initializing repository {github_url} with branches {branch_name}")
 
             # Correct initialization and concatenation of init_script
-            init_script = self._create_wrapper_dockerfile_script(workspace_id, repo_name, branch_name, pool_name)
-            init_script += self._create_wrapper_dockerfile(workspace_id)
+            init_script = self._create_wrapper_dockerfile_script(self, workspace_id, workspace_config)
+            init_script += self._create_wrapper_dockerfile(self, workspace_id)
 
             # Add repository cloning logic here
             # ...existing code...
