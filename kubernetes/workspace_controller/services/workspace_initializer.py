@@ -51,8 +51,8 @@ class WorkspaceInitializer:
 
             logger.info(f"Initializing repository {github_url} with branches {branch_name}")
 
-            # Initialize init_script with an empty string before usage
-            init_script = self.create_wrapper_dockerfile_script(workspace_id, repo_name, branch_name, pool_name)
+            # Correct initialization and concatenation of init_script
+            init_script = self._create_wrapper_dockerfile_script(workspace_id, repo_name, branch_name, pool_name)
             init_script += self._create_wrapper_dockerfile(workspace_id)
 
             # Add repository cloning logic here
@@ -1061,4 +1061,3 @@ fi
 echo "Feature installation completed"
 """
 
-   
