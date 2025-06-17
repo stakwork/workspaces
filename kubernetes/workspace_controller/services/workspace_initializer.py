@@ -42,31 +42,45 @@ class WorkspaceInitializer:
 
             # Ensure branch_name is set to default if empty
             branch_name = branch_name or "main"
+            repo_name = repo_name
 
-            # Normalize GitHub repository URL
-            github_url = repo_name.rstrip('/')
-            if not github_url.startswith("http://") and not github_url.startswith("https://"):
-                github_url = f"https://github.com/{github_url}"  # Assume GitHub URL if not specified
+            # Update workspace_config with repo_name
+            workspace_config['repo_name'] = repo_name
 
+            logger.info(f"Initializing repository {repo_name} with branches {branch_name}")
 
-            logger.info(f"Initializing repository {github_url} with branches {branch_name}")
+            # Validate workspace_config lists before accessing
+            if not workspace_config['github_urls']:
+                raise ValueError("Missing GitHub URLs in workspace_config")
+
+            if not workspace_config['github_branches']:
+                workspace_config['github_branches'] = ["main"]  # Default to 'main' branch
+
+            # Validate and populate GitHub URLs
+            if not workspace_config['github_urls']:
+                normalized_url = self.normalize_github_url(repo_name)
+                workspace_config['github_urls'] = [normalized_url]
+                logger.info(f"Populated GitHub URLs in workspace_config: {workspace_config['github_urls']}")
 
             # Correct initialization and concatenation of init_script
-            init_script = self._create_wrapper_dockerfile_script(self, workspace_id, workspace_config)
-            init_script += self._create_wrapper_dockerfile(self, workspace_id)
+            init_script = self._create_wrapper_dockerfile_script(workspace_id, workspace_config)
+            init_script += self._create_wrapper_dockerfile(workspace_id)
 
-            # Add repository cloning logic here
-            # ...existing code...
+            # Validate workspace_config and repo_name
+            if 'repo_name' not in workspace_config or not workspace_config['repo_name']:
+                raise ValueError("Missing or invalid 'repo_name' in workspace_config")
 
+            # Correct repository cloning logic
             init_script += f"""
     # Check if the first repository actually got cloned
     if [ ! -d "$USER_REPO_PATH" ]; then
         echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
+        mkdir -p /workspaces
         cd /workspaces
-        
+
         # Get the branch for the first repository
-        BRANCH="{workspace_config['github_branches'][0] if workspace_config['github_branches'] and workspace_config['github_branches'][0] else ''}"
-        
+        BRANCH="{workspace_config['github_branches'][0]}"
+
         if [ ! -z "$BRANCH" ]; then
             echo "Cloning with specific branch: $BRANCH"
             git clone -b $BRANCH {workspace_config['github_urls'][0]} {repo_name}
@@ -109,6 +123,7 @@ class WorkspaceInitializer:
                 'namespace_name': namespace,
                 'workspace_id': workspace_id
             }, github_pat)
+            # Create ConfigMap early in the initialization process
             self._create_init_script_configmap({
                 'namespace_name': namespace,
                 'workspace_id': workspace_id,
@@ -119,19 +134,31 @@ class WorkspaceInitializer:
                 'branch_name': branch_name,
                 'pool_name': pool_name
             })
-            self._create_feature_installation_configmap({
-                'namespace_name': namespace,
-                'workspace_id': workspace_id
-            })
-            self._create_workspace_info_configmap({
-                'namespace_name': namespace,
-                'workspace_id': workspace_id,
-                'subdomain': subdomain
-            }, {
-                'repo_name': repo_name,
-                'branch_name': branch_name,
-                'pool_name': pool_name
-            })
+
+            logger.info("ConfigMap created successfully.")
+
+            try:
+                self._create_feature_installation_configmap({
+                    'namespace_name': namespace,
+                    'workspace_id': workspace_id
+                })
+            except Exception as e:
+                logger.error(f"Error creating feature installation configmap: {e}")
+                return False
+
+            try:
+                self._create_workspace_info_configmap({
+                    'namespace_name': namespace,
+                    'workspace_id': workspace_id,
+                    'subdomain': subdomain
+                }, {
+                    'repo_name': repo_name,
+                    'branch_name': branch_name,
+                    'pool_name': pool_name
+                })
+            except Exception as e:
+                logger.error(f"Error creating workspace info configmap: {e}")
+                return False
 
             # Copy necessary resources
             self._copy_port_detector_configmap({
@@ -173,11 +200,25 @@ class WorkspaceInitializer:
                 'subdomain': subdomain
             })
 
-            logger.info(f"Successfully initialized workspace in namespace: {namespace}")
+            try:
+                logger.info(f"Successfully initialized workspace in namespace: {namespace}")
+            except Exception as e:
+                logger.error(f"Error initializing workspace: {e}")
+                return False
+
             return True
         except Exception as e:
             logger.error(f"Error initializing workspace: {e}")
             return False
+
+    def normalize_github_url(self, repo_name: str) -> str:
+        """Normalize GitHub repository URL."""
+        repo_name = repo_name.rstrip('/')
+        if repo_name.startswith(("http://", "https://")):
+            return repo_name  # Already a valid URL
+        if repo_name.startswith("github.com/"):
+            return f"https://{repo_name}"  # Handle `github.com/user/repo`
+        return f"https://github.com/{repo_name}"  # Default case
 
     def _create_namespace(self, workspace_ids: dict, for_pool: bool = False):
         """Create Kubernetes namespace for the workspace"""

@@ -92,7 +92,7 @@ class PoolService:
             self.pools[name] = pool
             logger.info(f"Created new pool: {name} with {minimum_vms} minimum VMs")
 
-            # Create ConfigMap to store pool configuration
+            # Create ConfigMap
             try:
                 config_map = client.V1ConfigMap(
                     metadata=client.V1ObjectMeta(
@@ -511,12 +511,16 @@ class PoolService:
             )
             
             # Normalize GitHub repository URL
-            github_url = repo_name
-            if not github_url.startswith(("http://", "https://")):
-                if github_url.startswith("github.com/"):
-                    github_url = f"https://{github_url}"
-                else:
-                    github_url = f"https://github.com/{github_url}"
+            def normalize_github_url(repo_name: str) -> str:
+                """Normalize GitHub repository URL."""
+                repo_name = repo_name.rstrip('/')
+                if repo_name.startswith(("http://", "https://")):
+                    return repo_name  # Already a valid URL
+                if repo_name.startswith("github.com/"):
+                    return f"https://{repo_name}"  # Handle `github.com/user/repo`
+                return f"https://github.com/{repo_name}"  # Default case
+
+            github_url = normalize_github_url(repo_name)
 
             # Create workspace config with normalized URL and branch
             workspace_config = {
@@ -1671,4 +1675,3 @@ fi
 echo "Feature installation completed successfully"
 """
 
-    
