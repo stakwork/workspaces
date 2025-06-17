@@ -54,43 +54,64 @@ USER_REPO_PATH="/workspaces/{repo_name}"
 DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
 DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
 
-# Process Dockerfile and devcontainer.json
+# Process devcontainer configuration
 if [ -d "$USER_REPO_PATH" ]; then
     echo "Repository exists at $USER_REPO_PATH"
     
-    if [ -f "$DOCKERFILE_PATH" ]; then
-        echo "Found Dockerfile, copying to workspace"
-        cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
+    if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
+        echo "Found devcontainer.json, processing configuration"
+        cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
         
-        if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
-            echo "Found devcontainer.json, processing configuration"
-            cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
-            
-            # Install jq if needed
-            if ! command -v jq &> /dev/null; then
-                apt-get update && apt-get install -y jq tmux
-            fi
-            
-            # Process JSON configurations
-            jq -r '.features // {{}}' "$DEVCONTAINER_JSON_PATH" > /workspaces/.devcontainer-features 2>/dev/null
-            jq -r '.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" > /workspaces/.extensions-list 2>/dev/null
-            
-            # Extract other configurations
-            if [ -s "$DEVCONTAINER_JSON_PATH" ]; then
-                jq -r '.settings // empty' "$DEVCONTAINER_JSON_PATH" > /workspaces/.vscode/settings.json 2>/dev/null
-                jq -r '.forwardPorts[]? // empty' "$DEVCONTAINER_JSON_PATH" > /workspaces/.forward-ports 2>/dev/null
-            fi
+        # Install jq if needed
+        if ! command -v jq &> /dev/null; then
+            apt-get update && apt-get install -y jq tmux
+        fi
+        
+        # Check for predefined image in devcontainer.json
+        IMAGE=$(jq -r '.image // empty' "$DEVCONTAINER_JSON_PATH")
+        if [ ! -z "$IMAGE" ]; then
+            echo "Using predefined image from devcontainer.json: $IMAGE"
+            echo "FROM $IMAGE" > /workspaces/.user-dockerfile/Dockerfile
+        elif [ -f "$DOCKERFILE_PATH" ]; then
+            echo "Found Dockerfile, copying to workspace"
+            cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
+        else
+            echo "No image or Dockerfile found, using default Go image"
+            echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+        fi
+        
+        # Process extensions
+        EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+        if [ ! -z "$EXTENSIONS" ]; then
+            echo "$EXTENSIONS" > /workspaces/.extensions-list
+        fi
+        
+        # Process settings
+        SETTINGS=$(jq -r '.customizations.vscode.settings // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+        if [ ! -z "$SETTINGS" ]; then
+            mkdir -p /workspaces/.vscode
+            echo "$SETTINGS" > /workspaces/.vscode/settings.json
+        fi
+        
+        # Process remote user
+        REMOTE_USER=$(jq -r '.remoteUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+        if [ ! -z "$REMOTE_USER" ]; then
+            echo "REMOTE_USER=$REMOTE_USER" > /workspaces/.user-config
+        fi
+        
+        # Process post create command
+        POST_CREATE=$(jq -r '.postCreateCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+        if [ ! -z "$POST_CREATE" ]; then
+            echo "$POST_CREATE" > /workspaces/post-create-command.sh
+            chmod +x /workspaces/post-create-command.sh
         fi
     else
-        echo "No Dockerfile found, using default Go image"
-        mkdir -p /workspaces/.user-dockerfile
+        echo "No devcontainer.json found, using default Go image"
         echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
     fi
 else
     echo "ERROR: Repository directory does not exist"
     ((ERROR_COUNT++))
-    mkdir -p /workspaces/.user-dockerfile
-    echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
 fi
 
 # Final status
@@ -247,14 +268,12 @@ echo "[$(date)] Initialization finished"
         workspace_config.get('github_urls', []), 
         workspace_config.get('github_branches', [])
     ):
-        init_script.append(f"clone_repo '{url}' '{branch}'")
 
-    init_script.extend([
+        init_script.extend([
         # Function to handle devcontainer setup and feature installation
         'function setup_devcontainer() {',
         '    local dir="$1"',
         '    echo "Setting up devcontainer in $dir..."',
-        '    update_status "setting_up_devcontainer"',
         '',
         '    # Check for devcontainer configuration',
         '    if [ -f "$dir/.devcontainer/devcontainer.json" ]; then',
@@ -266,7 +285,6 @@ echo "[$(date)] Initialization finished"
         '            echo "Setting up devcontainer features..."',
         '            jq -r .features "$config_file" > /workspaces/.devcontainer-features',
         '            # Install features immediately after finding them',
-        '            update_status "installing_features"',
         '            echo "Installing devcontainer features..."',
         '            # Signal feature installation completion',
         '            touch /workspaces/.features-installed',
@@ -350,10 +368,8 @@ echo "[$(date)] Initialization finished"
         'if [ $ERROR_COUNT -gt 0 ] || [ $VALIDATION_FAILED -gt 0 ]; then',
         '    MSG="Workspace initialization completed with $ERROR_COUNT dependency warnings and $VALIDATION_FAILED validation errors"',
         '    echo "$MSG"',
-        '    update_status "ready_with_warnings|$MSG"',
         'else',
         '    echo "Workspace initialization completed successfully"',
-        '    update_status "ready"',
         'fi',
         '',
         '# Mark initialization as complete',
