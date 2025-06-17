@@ -51,6 +51,9 @@ class WorkspaceInitializer:
 
             logger.info(f"Initializing repository {github_url} with branches {branch_name}")
 
+            # Initialize init_script with an empty string before usage
+            init_script = self.create_wrapper_dockerfile_script(workspace_id, repo_name, branch_name, pool_name)
+
             # Add repository cloning logic here
             # ...existing code...
 
