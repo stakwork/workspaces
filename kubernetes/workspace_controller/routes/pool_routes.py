@@ -179,6 +179,25 @@ def configure_routes(pool_service):
                 "pool": response_data
             }), 201
 
+        except client.exceptions.ApiException as e:
+            if e.status == 409:
+                # Handle conflict error gracefully
+                return jsonify({
+                    "status": "error",
+                    "message": f"Pool '{pool_data['name']}' already exists",
+                    "code": "POOL_EXISTS"
+                }), 409
+            elif e.status == 503:
+                return jsonify({
+                    "status": "error",
+                    "message": "Kubernetes API is currently unavailable"
+                }), 503
+            else:
+                logger.error(f"Kubernetes API error in create_pool: {str(e)}", exc_info=True)
+                return jsonify({
+                    "status": "error",
+                    "message": f"Kubernetes API error: {str(e)}"
+                }), e.status
         except RuntimeError as e:
             if "Kubernetes API is currently unavailable" in str(e):
                 return jsonify({

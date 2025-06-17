@@ -40,7 +40,7 @@ class PoolService:
             self.workspace_domain = "SUBDOMAIN_REPLACE_ME"
             self.aws_account_id = "AWS_ACCOUNT_ID_REPLACE_ME"
 
-        self.workspace_initializer = WorkspaceInitializer(core_v1, apps_v1, self.aws_account_id, self.workspace_domain)
+        self.workspace_initializer = WorkspaceInitializer(core_v1, apps_v1, self.workspace_domain, self.aws_account_id)
 
     def _generate_random_subdomain(self, length=8):
         """Generate a random subdomain name"""
@@ -510,31 +510,29 @@ class PoolService:
                 body=init_status_cm
             )
             
-            # Normalize GitHub repository URL
-            def normalize_github_url(repo_name: str) -> str:
-                """Normalize GitHub repository URL."""
-                repo_name = repo_name.rstrip('/')
-                if repo_name.startswith(("http://", "https://")):
-                    return repo_name  # Already a valid URL
-                if repo_name.startswith("github.com/"):
-                    return f"https://{repo_name}"  # Handle `github.com/user/repo`
-                return f"https://github.com/{repo_name}"  # Default case
-
-            github_url = normalize_github_url(repo_name)
+           
 
             # Create workspace config with normalized URL and branch
             workspace_config = {
-                'github_urls': [github_url],
-                'github_branches': [branch_name if branch_name else "main"],  # Use main as default if no branch specified
-                'github_pat': github_pat,
-                'use_custom_image_url': False
+                'repo_name': repo_name,
+                'branch_name': branch_name or 'main',
+                'fqdn': fqdn,
+                'subdomain': subdomain,
+                'build_timestamp': build_timestamp,
+                'aws_account_id': self.aws_account_id,
+                'workspace_id': workspace_id,
+                'pool_name': pool_name
             }
 
             # Generate workspace IDs for init script
             workspace_ids = {
-                'namespace_name': namespace,
-                'build_timestamp': datetime.now().strftime('%Y%m%d%H%M%S'),
-                'workspace_id': workspace_id
+                'workspace_id': workspace_id,
+                'pool_name': pool_name,
+                'repo_name': repo_name,
+                'branch_name': branch_name or 'main',
+                'fqdn': fqdn,
+                'subdomain': subdomain,
+                'build_timestamp': build_timestamp
             }
             
             # Generate the initialization script

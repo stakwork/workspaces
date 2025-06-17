@@ -1,6 +1,9 @@
 import json
 import logging
 import base64
+import re
+import random
+import string
 from datetime import datetime
 from kubernetes import client
 from utils.workspace_init import generate_init_script
@@ -22,6 +25,11 @@ class WorkspaceInitializer:
         self.workspace_domain = workspace_domain
         self.aws_account_id = aws_account_id
 
+    def _generate_random_subdomain(self, length=8) -> str:
+        """Generate a random subdomain name"""
+        letters = string.ascii_lowercase + string.digits
+        return ''.join(random.choice(letters) for i in range(length))
+
     def initialize_workspace(self, 
                            workspace_id: str, 
                            repo_name: str,
@@ -32,39 +40,72 @@ class WorkspaceInitializer:
                            build_timestamp: str = None) -> bool:
         """Initialize a workspace with all required resources"""
         try:
+            # Validate workspace_id
+            if not isinstance(workspace_id, str) or not workspace_id:
+                raise ValueError("workspace_id must be a non-empty string")
+
+            # Initialize workspace_config with normalized GitHub URLs and branches
+            # Extract just the repo name from the full URL for proper usage
+            repo_short_name = repo_name.split('/')[-1] if repo_name and '/' in repo_name else repo_name
+            
+            workspace_config = {
+                'github_branches': [branch_name] if branch_name else ["main"],
+                'github_urls': [repo_name] if repo_name else [],
+                'repo_name': repo_short_name
+            }
+            
+            # Ensure build timestamp is set
             if not build_timestamp:
                 build_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
+            # Generate unique subdomain and namespace for this workspace
+            
+            subdomain = f"{self._generate_random_subdomain()}"
+            # Use workspace_domain for FQDN as it should be the actual domain
+            fqdn = f"{subdomain}.{self.workspace_domain}"
             namespace = f"workspace-{workspace_id}"
-            subdomain = f"{workspace_id[:8]}-{build_timestamp}"  # Generate subdomain using workspace_id and timestamp
 
-            logger.info(f"Initializing workspace in namespace: {namespace} with build_timestamp: {build_timestamp} and subdomain: {subdomain}")
+            # Create workspace_ids dictionary that will be used throughout the initialization
+            workspace_ids = {
+                'namespace_name': namespace,
+                'workspace_id': workspace_id,
+                'build_timestamp': build_timestamp,
+                'subdomain': subdomain,
+                'fqdn': fqdn
+            }
 
-            # Ensure branch_name is set to default if empty
-            branch_name = branch_name or "main"
-            repo_name = repo_name
+            logger.info(f"Initializing workspace in namespace: {namespace} with subdomain: {subdomain}")
 
-            # Update workspace_config with repo_name
-            workspace_config['repo_name'] = repo_name
+            # Add environment variables for workspace initialization
+            workspace_config['environment_variables'] = {
+                "WORKSPACE_ID": workspace_ids['workspace_id'],
+                "REPO_NAME": workspace_config['repo_name'],  # Use the short repo name
+                "BRANCH_NAME": workspace_config['github_branches'][0] if workspace_config['github_branches'] else "main",
+                "GITHUB_PAT": github_pat,
+                "POOL_NAME": pool_name,
+                "BUILD_TIMESTAMP": workspace_ids['build_timestamp'],
+                "FQDN": workspace_ids['fqdn'],    
+                "SUBDOMAIN": workspace_ids['subdomain'],
+                "WORKSPACE_DOMAIN": self.workspace_domain,  # This is the actual domain
+                "AWS_ACCOUNT_ID": self.aws_account_id,    # This is the AWS account ID
+                "USER_REPO_PATH": f"/workspaces/{workspace_config['repo_name']}"  # Use the short repo name
+            }
+            logger.info(f"Added repo_name and environment variables to workspace_config: {workspace_config}")
 
             logger.info(f"Initializing repository {repo_name} with branches {branch_name}")
 
+        
             # Validate workspace_config lists before accessing
             if not workspace_config['github_urls']:
                 raise ValueError("Missing GitHub URLs in workspace_config")
 
-            if not workspace_config['github_branches']:
+            if not workspace_config.get('github_branches'):
                 workspace_config['github_branches'] = ["main"]  # Default to 'main' branch
 
-            # Validate and populate GitHub URLs
-            if not workspace_config['github_urls']:
-                normalized_url = self.normalize_github_url(repo_name)
-                workspace_config['github_urls'] = [normalized_url]
-                logger.info(f"Populated GitHub URLs in workspace_config: {workspace_config['github_urls']}")
-
             # Correct initialization and concatenation of init_script
-            init_script = self._create_wrapper_dockerfile_script(workspace_id, workspace_config)
-            init_script += self._create_wrapper_dockerfile(workspace_id)
+            init_script = self._create_wrapper_dockerfile_script(workspace_ids['workspace_id'], workspace_config)
+            init_script += self._create_wrapper_dockerfile(workspace_ids['workspace_id'])
+
 
             # Validate workspace_config and repo_name
             if 'repo_name' not in workspace_config or not workspace_config['repo_name']:
@@ -100,7 +141,8 @@ class WorkspaceInitializer:
                     'namespace_name': namespace,
                     'workspace_id': workspace_id,
                     'build_timestamp': build_timestamp,
-                    'subdomain': subdomain
+                    'subdomain': subdomain,
+                    'fqdn': fqdn
                 }, for_pool)
             except client.exceptions.ApiException as e:
                 if e.status == 409:  # Namespace already exists
@@ -211,15 +253,6 @@ class WorkspaceInitializer:
             logger.error(f"Error initializing workspace: {e}")
             return False
 
-    def normalize_github_url(self, repo_name: str) -> str:
-        """Normalize GitHub repository URL."""
-        repo_name = repo_name.rstrip('/')
-        if repo_name.startswith(("http://", "https://")):
-            return repo_name  # Already a valid URL
-        if repo_name.startswith("github.com/"):
-            return f"https://{repo_name}"  # Handle `github.com/user/repo`
-        return f"https://github.com/{repo_name}"  # Default case
-
     def _create_namespace(self, workspace_ids: dict, for_pool: bool = False):
         """Create Kubernetes namespace for the workspace"""
         namespace = client.V1Namespace(
@@ -229,6 +262,7 @@ class WorkspaceInitializer:
                     "workspace-id": workspace_ids['workspace_id'],
                     "app": "workspace",
                     "initialization": "in-progress",
+                    "fqdn": workspace_ids['fqdn'],
                     "type": "pool" if for_pool else "workspace"
                 }
             )
@@ -500,6 +534,7 @@ class WorkspaceInitializer:
 
     def _create_ingress(self, workspace_ids: dict):
         """Create ingress for the workspace"""
+        fqdn = workspace_ids.get('fqdn', f"{workspace_ids.get('subdomain')}.{self.workspace_domain}")
         ingress = client.V1Ingress(
             metadata=client.V1ObjectMeta(
                 name="code-server",
@@ -519,7 +554,7 @@ class WorkspaceInitializer:
                 ],
                 rules=[
                     client.V1IngressRule(
-                        host=workspace_ids.get('fqdn'),
+                        host=fqdn,
                         http=client.V1HTTPIngressRuleValue(
                             paths=[
                                 client.V1HTTPIngressPath(
