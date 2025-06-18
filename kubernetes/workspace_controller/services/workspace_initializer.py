@@ -820,7 +820,7 @@ class WorkspaceInitializer:
     def _create_code_server_container(self, workspace_ids: dict, workspace_config: dict) -> client.V1Container:
         """Create the main code-server container"""
         return client.V1Container(
-            name="workspace",
+            name="code-server",
             image=f"{self.aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             image_pull_policy="Always",
             env=[
