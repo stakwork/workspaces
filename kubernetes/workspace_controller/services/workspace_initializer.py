@@ -41,35 +41,6 @@ class WorkspaceInitializer:
                            build_timestamp: str = None) -> bool:
         """Initialize a workspace with all required resources"""
         try:
-            # Validate workspace_id
-            if not isinstance(workspace_id, str) or not workspace_id:
-                raise ValueError("workspace_id must be a non-empty string")
-
-            # Initialize workspace_config with normalized GitHub URLs and branches
-            # Extract just the repo name from the full URL for proper usage
-            repo_short_name = repo_name.split('/')[-1] if repo_name and '/' in repo_name else repo_name
-            
-            # Ensure github_urls is always a list with at least one URL
-            if repo_name:
-                github_urls = [repo_name]
-            else:
-                raise ValueError("repo_name is required to initialize a workspace")
-
-            # Initialize workspace_config with proper GitHub URLs and branches
-            workspace_config = {
-                'github_branches': [branch_name] if branch_name else ["main"],
-                'github_urls': github_urls,
-                'repo_name': repo_short_name,
-                'branch_name': branch_name,
-                'pool_name': pool_name,
-                'use_custom_image_url': False,
-                'custom_image_url': None,
-                'custom_wrapper_image_url': None,
-            }
-            
-            logger.info(f"Initialized workspace_config: {workspace_config}")
-
-            # Ensure build timestamp is set
             if not build_timestamp:
                 build_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
@@ -77,6 +48,9 @@ class WorkspaceInitializer:
             subdomain = self._generate_random_subdomain()
             namespace = f"workspace-{workspace_id}"
             fqdn = f"{subdomain}.{self.workspace_domain}"
+            
+            # Generate the password once here to use in multiple places
+            password = self._generate_random_password()
 
             # Create workspace_ids dictionary that will be used throughout the initialization
             workspace_ids = {
@@ -84,179 +58,32 @@ class WorkspaceInitializer:
                 'workspace_id': workspace_id,
                 'build_timestamp': build_timestamp,
                 'subdomain': subdomain,
-                'fqdn': fqdn
+                'fqdn': fqdn,
+                'password': password  # Add password to workspace_ids
             }
 
-            logger.info(f"Initializing workspace in namespace: {namespace} with subdomain: {subdomain}")
-
-            # Add environment variables for workspace initialization
-            workspace_config['environment_variables'] = {
-                "NAMESPACE_NAME": workspace_ids['namespace_name'],  # Use from workspace_ids
-                "WORKSPACE_ID": workspace_ids['workspace_id'],
-                "WORKSPACE_NAME": workspace_ids['workspace_id'],  # Use workspace_id as workspace name
-                "REPO_NAME": workspace_config['repo_name'],
-                "REPO_URL": workspace_config['github_urls'][0] if workspace_config['github_urls'] else "",
-                "BRANCH_NAME": workspace_config['github_branches'][0] if workspace_config['github_branches'] else "main",
-                "GITHUB_PAT": github_pat,
-                "POOL_NAME": pool_name,
-                "BUILD_TIMESTAMP": workspace_ids['build_timestamp'],
-                "FQDN": workspace_ids['fqdn'],
-                "SUBDOMAIN": workspace_ids['subdomain'],
-                "WORKSPACE_DOMAIN": self.workspace_domain,
-                "AWS_ACCOUNT_ID": self.aws_account_id,
-                "USER_REPO_PATH": f"/workspaces/{workspace_config['repo_name']}"
+            # Create workspace_config dictionary
+            workspace_config = {
+                'repo_name': repo_name,
+                'github_urls': [f"https://github.com/{repo_name}"],
+                'github_branches': [branch_name] if branch_name else ['main'],
+                'pool_name': pool_name
             }
-
-            logger.info(f"Added repo_name and environment variables to workspace_config: {workspace_config}")
-            logger.info(f"Initializing repository {repo_name} with branches {branch_name if branch_name else 'main'}")
-
-            # Set default branch to main if none is provided
-            if not branch_name:
-                branch_name = "main"
-                workspace_config['github_branches'] = ["main"]
-        
-            # Validate workspace_config lists before accessing
-            if not workspace_config['github_urls']:
-                raise ValueError("Missing GitHub URLs in workspace_config")
-
-            if not workspace_config.get('github_branches'):
-                workspace_config['github_branches'] = ["main"]  # Default to 'main' branch
-
-            # Create workspace initialization script
-            init_script = generate_init_script(workspace_ids, workspace_config)
-
-            # Add Docker configuration scripts
-            wrapper_script = self._create_wrapper_dockerfile_script(workspace_ids, workspace_config)
-            if wrapper_script:
-                init_script += wrapper_script
-
-            dockerfile_script = self._create_wrapper_dockerfile(workspace_ids)
-            if dockerfile_script:
-                init_script += dockerfile_script
-
-
-            # Validate workspace_config and repo_name
-            if 'repo_name' not in workspace_config or not workspace_config['repo_name']:
-                raise ValueError("Missing or invalid 'repo_name' in workspace_config")
-
-            # Correct repository cloning logic
-            init_script += f"""
-    # Check if the first repository actually got cloned
-    if [ ! -d "$USER_REPO_PATH" ]; then
-        echo "Repository not found at $USER_REPO_PATH, attempting to clone again"
-        mkdir -p /workspaces
-        cd /workspaces
-
-        # Get the branch for the first repository
-        BRANCH="{workspace_config['github_branches'][0]}"
-
-        if [ ! -z "$BRANCH" ]; then
-            echo "Cloning with specific branch: $BRANCH"
-            git clone -b $BRANCH {workspace_config['github_urls'][0]} {repo_name}
-        else
-            echo "Cloning with default branch"
-            git clone {workspace_config['github_urls'][0]} {repo_name}
-        fi
-
-        git config --global --add safe.directory /workspaces/{repo_name}
-    fi
-    """
             
-            
+            logger.info(f"Initialized workspace_config: {workspace_config}")
 
-            # Handle namespace conflict
-            try:
-                # First try to delete the namespace if it exists
-                try:
-                    self.core_v1.delete_namespace(namespace)
-                    logger.info(f"Deleted existing namespace: {namespace}")
-                    # Wait for namespace to be fully deleted
-                    max_retries = 30
-                    while max_retries > 0:
-                        try:
-                            self.core_v1.read_namespace(namespace)
-                            time.sleep(1)
-                            max_retries -= 1
-                        except client.exceptions.ApiException as e:
-                            if e.status == 404:  # Namespace is gone
-                                break
-                except client.exceptions.ApiException as e:
-                    if e.status != 404:  # 404 means namespace didn't exist, which is fine
-                        logger.warning(f"Error deleting old namespace: {e}")
-
-                # Now create the new namespace
-                self._create_namespace({
-                    'namespace_name': namespace,
-                    'workspace_id': workspace_id,
-                    'build_timestamp': build_timestamp,
-                    'subdomain': subdomain,
-                    'fqdn': fqdn
-                }, for_pool)
-            except client.exceptions.ApiException as e:
-                if e.status == 409:  # Namespace already exists
-                    logger.error(f"Namespace {namespace} still exists after cleanup attempt")
-                    raise
-                else:
-                    raise
+            # Create namespace first
+            self._create_namespace(workspace_ids, for_pool)
 
             # Create PVCs
-            self._create_workspace_pvc({
-                'namespace_name': namespace,
-                'workspace_id': workspace_id
-            })
-            self._create_registry_pvc({
-                'namespace_name': namespace,
-                'workspace_id': workspace_id
-            })
+            self._create_workspace_pvc(workspace_ids)
+            self._create_registry_pvc(workspace_ids)
 
             # Create secrets and configmaps
-            self._create_workspace_secret({
-                'namespace_name': namespace,
-                'workspace_id': workspace_id
-            }, github_pat)
-            # Create ConfigMap early in the initialization process
-            # Create ConfigMap early in the initialization process
-            # Pass through github_urls from workspace_config
-            self._create_init_script_configmap({
-                'namespace_name': namespace,
-                'workspace_id': workspace_id,
-                'build_timestamp': build_timestamp,
-                'subdomain': subdomain
-            }, {
-                'repo_name': repo_name,
-                'branch_name': branch_name,
-                'pool_name': pool_name,
-                'github_urls': workspace_config['github_urls'],
-                'github_branches': workspace_config['github_branches'],
-                'use_custom_image_url': workspace_config.get('use_custom_image_url', False),
-                'custom_image_url': workspace_config.get('custom_image_url', None),
-                'custom_wrapper_image_url': workspace_config.get('custom_wrapper_image_url', None)
-            })
-
-            logger.info("ConfigMap created successfully.")
-
-            try:
-                self._create_feature_installation_configmap({
-                    'namespace_name': namespace,
-                    'workspace_id': workspace_id
-                })
-            except Exception as e:
-                logger.error(f"Error creating feature installation configmap: {e}")
-                return False
-
-            try:
-                self._create_workspace_info_configmap({
-                    'namespace_name': namespace,
-                    'workspace_id': workspace_id,
-                    'subdomain': subdomain
-                }, {
-                    'repo_name': repo_name,
-                    'branch_name': branch_name,
-                    'pool_name': pool_name
-                })
-            except Exception as e:
-                logger.error(f"Error creating workspace info configmap: {e}")
-                return False
+            self._create_workspace_secret(workspace_ids, github_pat)  # Pass workspace_ids with password
+            self._create_init_script_configmap(workspace_ids, workspace_config)
+            self._create_feature_installation_configmap(workspace_ids)
+            self._create_workspace_info_configmap(workspace_ids, workspace_config)
 
             # Copy necessary resources
             self._copy_port_detector_configmap({
@@ -364,9 +191,8 @@ class WorkspaceInitializer:
 
     def _create_workspace_secret(self, workspace_ids: dict, github_pat: str = None):
         """Create workspace secret with Github token and other credentials"""
-        password = self._generate_random_password()
         secret_data = {
-            "password": password
+            "password": workspace_ids['password']  # Use password from workspace_ids
         }
         if github_pat:
             secret_data["github_token"] = github_pat
@@ -432,7 +258,8 @@ class WorkspaceInitializer:
             "fqdn": workspace_ids.get('fqdn'),
             "url": f"https://{workspace_ids.get('fqdn')}",
             "created": datetime.now().isoformat(),
-            "pool_name": workspace_config.get('pool_name')
+            "pool_name": workspace_config.get('pool_name'),
+            "password": workspace_ids.get('password'),
         }
 
         config_map = client.V1ConfigMap(

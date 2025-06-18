@@ -1135,9 +1135,6 @@ data:
                     // Count available and in-use VMs
                     const availableVMs = data.workspaces.filter(vm => !vm.in_use).length;
                     const inUseVMs = data.workspaces.filter(vm => vm.in_use).length;
-                    const accessUrl = data.workspaces.length > 0 ? data.workspaces[0].fqdn : '';
-                    const password = data.workspaces.length > 0 ? data.workspaces[0].password : '';
-                    const replicas = data.workspaces.length;
                     
                     // Update the pool information with the VM counts
                     return {
@@ -1440,8 +1437,8 @@ data:
                     tbody.innerHTML = '';
                     poolVMs.workspaces.forEach(vm => {
                         console.log('VM DATA:', vm); // Debug: log VM object
-                        const accessUrl = vm.fqdn ? `https://${vm.fqdn}` : null;
-                        const password = vm.password || '';
+                        const accessUrl = vm.fqdn;
+                        const password = vm.password;
                         const statusClass = vm.status === 'running' ? 'text-green-600' : 
                                         vm.status === 'pending' ? 'text-yellow-600' : 
                                         vm.status === 'failed' ? 'text-red-600' : 'text-gray-600';
