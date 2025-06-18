@@ -172,3 +172,53 @@ def list_pool_workspaces(current_user, pool_name):
     except Exception as e:
         logger.error(f"Error in list_pool_workspaces: {e}")
         return jsonify({"error": str(e)}), 500
+
+@pool_bp.route('/<pool_name>/workspaces/<workspace_id>/mark-used', methods=['POST'])
+@token_required
+def mark_workspace_used(current_user, pool_name, workspace_id):
+    """Mark a workspace as used"""
+    try:
+        data = request.json or {}
+        user_info = data.get('user_info', current_user.get('username'))
+        
+        result = pool_service.mark_workspace_as_used(pool_name, workspace_id, user_info)
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.warning(f"Validation error in mark_workspace_used: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in mark_workspace_used: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@pool_bp.route('/<pool_name>/workspaces/<workspace_id>/mark-unused', methods=['POST'])
+@token_required
+def mark_workspace_unused(current_user, pool_name, workspace_id):
+    """Mark a workspace as unused"""
+    try:
+        result = pool_service.mark_workspace_as_unused(pool_name, workspace_id)
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.warning(f"Validation error in mark_workspace_unused: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in mark_workspace_unused: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@pool_bp.route('/<pool_name>/workspaces/<workspace_id>/usage', methods=['GET'])
+@token_required
+def get_workspace_usage(current_user, pool_name, workspace_id):
+    """Get workspace usage status"""
+    try:
+        result = pool_service.get_workspace_usage_status(pool_name, workspace_id)
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.warning(f"Validation error in get_workspace_usage: {e}")
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.error(f"Error in get_workspace_usage: {e}")
+        return jsonify({"error": str(e)}), 500

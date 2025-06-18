@@ -37,6 +37,8 @@ class PoolStatus:
     running_vms: int
     pending_vms: int
     failed_vms: int
+    used_vms: int = 0  # Add used VMs count
+    unused_vms: int = 0  # Add unused VMs count
     workspaces: List[Dict] = field(default_factory=list)
     last_check: datetime = field(default_factory=datetime.now)
     
@@ -50,6 +52,11 @@ class PoolStatus:
         """How many VMs need to be created"""
         return max(0, self.minimum_vms - (self.running_vms + self.pending_vms))
     
+    @property
+    def available_vms(self) -> int:
+        """How many VMs are available for use (running and unused)"""
+        return self.unused_vms
+    
     def to_dict(self):
         return {
             'pool_name': self.pool_name,
@@ -58,6 +65,8 @@ class PoolStatus:
             'running_vms': self.running_vms,
             'pending_vms': self.pending_vms,
             'failed_vms': self.failed_vms,
+            'used_vms': self.used_vms,
+            'unused_vms': self.unused_vms,
             'needs_scaling': self.needs_scaling,
             'scale_needed': self.scale_needed,
             'workspaces': self.workspaces,

@@ -20,7 +20,7 @@ class PoolService:
         self.pools: Dict[str, PoolConfig] = {}
         self.monitoring_threads: Dict[str, threading.Thread] = {}
         self.stop_monitoring: Dict[str, threading.Event] = {}
-        self.scaling_locks: Dict[str, threading.Lock] = {}  # Add locks to prevent concurrent scaling
+        self.scaling_locks: Dict[str, threading.Lock] = {}
         self._load_existing_pools()
     
     def create_pool(self, pool_name: str, minimum_vms: int, repo_name: str, 
@@ -188,7 +188,12 @@ class PoolService:
         try:
             workspaces = self._get_pool_workspaces(pool_name)
             
-            # Find a running workspace
+            # Find a running and unused workspace first
+            for workspace in workspaces:
+                if workspace.get('state') == 'running' and workspace.get('usage_status') == 'unused':
+                    return workspace
+            
+            # If no unused running workspace, try to find any running workspace
             for workspace in workspaces:
                 if workspace.get('state') == 'running':
                     return workspace
@@ -204,6 +209,167 @@ class PoolService:
         except Exception as e:
             logger.error(f"Error getting available workspace from pool '{pool_name}': {e}")
             return None
+    
+    def mark_workspace_as_used(self, pool_name: str, workspace_id: str, user_info: Optional[str] = None) -> Dict:
+        """Mark a workspace as used"""
+        if pool_name not in self.pools:
+            raise ValueError(f"Pool '{pool_name}' not found")
+        
+        try:
+            # Find the workspace namespace
+            namespace_name = f"workspace-{workspace_id}"
+            
+            # Verify the workspace belongs to this pool
+            try:
+                namespace = self.core_v1.read_namespace(namespace_name)
+                if namespace.metadata.labels.get('pool') != pool_name:
+                    raise ValueError(f"Workspace '{workspace_id}' does not belong to pool '{pool_name}'")
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    raise ValueError(f"Workspace '{workspace_id}' not found")
+                raise
+            
+            # Update the workspace usage status
+            self._update_workspace_usage_status(namespace_name, 'used', user_info)
+            
+            logger.info(f"Marked workspace '{workspace_id}' as used in pool '{pool_name}'")
+            
+            return {
+                "success": True,
+                "message": f"Workspace '{workspace_id}' marked as used",
+                "workspace_id": workspace_id,
+                "pool_name": pool_name,
+                "usage_status": "used",
+                "user_info": user_info
+            }
+            
+        except Exception as e:
+            logger.error(f"Error marking workspace '{workspace_id}' as used: {e}")
+            raise Exception(f"Failed to mark workspace as used: {str(e)}")
+    
+    def mark_workspace_as_unused(self, pool_name: str, workspace_id: str) -> Dict:
+        """Mark a workspace as unused"""
+        if pool_name not in self.pools:
+            raise ValueError(f"Pool '{pool_name}' not found")
+        
+        try:
+            # Find the workspace namespace
+            namespace_name = f"workspace-{workspace_id}"
+            
+            # Verify the workspace belongs to this pool
+            try:
+                namespace = self.core_v1.read_namespace(namespace_name)
+                if namespace.metadata.labels.get('pool') != pool_name:
+                    raise ValueError(f"Workspace '{workspace_id}' does not belong to pool '{pool_name}'")
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    raise ValueError(f"Workspace '{workspace_id}' not found")
+                raise
+            
+            # Update the workspace usage status
+            self._update_workspace_usage_status(namespace_name, 'unused')
+            
+            logger.info(f"Marked workspace '{workspace_id}' as unused in pool '{pool_name}'")
+            
+            return {
+                "success": True,
+                "message": f"Workspace '{workspace_id}' marked as unused",
+                "workspace_id": workspace_id,
+                "pool_name": pool_name,
+                "usage_status": "unused"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error marking workspace '{workspace_id}' as unused: {e}")
+            raise Exception(f"Failed to mark workspace as unused: {str(e)}")
+    
+    def get_workspace_usage_status(self, pool_name: str, workspace_id: str) -> Dict:
+        """Get the usage status of a workspace"""
+        if pool_name not in self.pools:
+            raise ValueError(f"Pool '{pool_name}' not found")
+        
+        try:
+            # Find the workspace namespace
+            namespace_name = f"workspace-{workspace_id}"
+            
+            # Get the workspace usage status
+            usage_info = self._get_workspace_usage_status(namespace_name)
+            
+            return {
+                "success": True,
+                "workspace_id": workspace_id,
+                "pool_name": pool_name,
+                "usage_status": usage_info.get('status', 'unused'),
+                "user_info": usage_info.get('user_info'),
+                "marked_at": usage_info.get('marked_at')
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting workspace usage status: {e}")
+            raise Exception(f"Failed to get workspace usage status: {str(e)}")
+    
+    def _update_workspace_usage_status(self, namespace_name: str, status: str, user_info: Optional[str] = None):
+        """Update workspace usage status via ConfigMap"""
+        try:
+            usage_data = {
+                'status': status,
+                'marked_at': datetime.now().isoformat()
+            }
+            
+            if user_info:
+                usage_data['user_info'] = user_info
+            
+            config_map = client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(
+                    name="workspace-usage",
+                    namespace=namespace_name,
+                    labels={"app": "workspace-usage"}
+                ),
+                data={
+                    "usage.json": json.dumps(usage_data)
+                }
+            )
+            
+            try:
+                # Try to update first
+                self.core_v1.patch_namespaced_config_map(
+                    name="workspace-usage",
+                    namespace=namespace_name,
+                    body=config_map
+                )
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    # Create if it doesn't exist
+                    self.core_v1.create_namespaced_config_map(
+                        namespace=namespace_name,
+                        body=config_map
+                    )
+                else:
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"Error updating workspace usage status: {e}")
+            raise
+    
+    def _get_workspace_usage_status(self, namespace_name: str) -> Dict:
+        """Get workspace usage status from ConfigMap"""
+        try:
+            config_map = self.core_v1.read_namespaced_config_map(
+                name="workspace-usage",
+                namespace=namespace_name
+            )
+            
+            usage_data = json.loads(config_map.data.get("usage.json", "{}"))
+            return usage_data
+            
+        except client.rest.ApiException as e:
+            if e.status == 404:
+                # No usage status ConfigMap means unused
+                return {'status': 'unused'}
+            raise
+        except Exception as e:
+            logger.error(f"Error getting workspace usage status: {e}")
+            return {'status': 'unused'}
     
     def _load_existing_pools(self):
         """Load existing pools from Kubernetes"""
@@ -327,6 +493,12 @@ class PoolService:
                         else:
                             workspace_info["state"] = "creating"  # No pods yet, still being created
                         
+                        # Get usage status
+                        usage_info = self._get_workspace_usage_status(ns.metadata.name)
+                        workspace_info["usage_status"] = usage_info.get('status', 'unused')
+                        workspace_info["user_info"] = usage_info.get('user_info')
+                        workspace_info["marked_at"] = usage_info.get('marked_at')
+                        
                         workspaces.append(workspace_info)
                         
                 except Exception as e:
@@ -347,12 +519,14 @@ class PoolService:
         pool_config = self.pools[pool_name]
         workspaces = self._get_pool_workspaces(pool_name)
         
-        # Count workspaces by state
+        # Count workspaces by state and usage
         running_vms = len([w for w in workspaces if w.get('state') == 'running'])
         pending_vms = len([w for w in workspaces if w.get('state') in ['pending', 'creating']])
         failed_vms = len([w for w in workspaces if w.get('state') in ['failed', 'error']])
+        used_vms = len([w for w in workspaces if w.get('usage_status') == 'used' and w.get('state') == 'running'])
+        unused_vms = len([w for w in workspaces if w.get('usage_status') != 'used' and w.get('state') == 'running'])
         
-        logger.debug(f"Pool {pool_name} status: total={len(workspaces)}, running={running_vms}, pending={pending_vms}, failed={failed_vms}, minimum={pool_config.minimum_vms}")
+        logger.debug(f"Pool {pool_name} status: total={len(workspaces)}, running={running_vms}, pending={pending_vms}, failed={failed_vms}, used={used_vms}, unused={unused_vms}, minimum={pool_config.minimum_vms}")
         
         return PoolStatus(
             pool_name=pool_name,
@@ -361,6 +535,8 @@ class PoolService:
             running_vms=running_vms,
             pending_vms=pending_vms,
             failed_vms=failed_vms,
+            used_vms=used_vms,
+            unused_vms=unused_vms,
             workspaces=workspaces
         )
     
@@ -403,6 +579,9 @@ class PoolService:
                             
                             # Add pool label to namespace
                             self._label_namespace_with_pool(namespace_name, pool_name)
+                            
+                            # Mark as unused initially
+                            self._update_workspace_usage_status(namespace_name, 'unused')
                             
                             created_count += 1
                             logger.info(f"Created workspace {workspace_id} for pool '{pool_name}' ({created_count}/{needed_vms})")
