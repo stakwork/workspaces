@@ -431,22 +431,23 @@ echo "[$(date)] Initialization finished"
 def _generate_workspace_script(workspace_ids, workspace_config):
     """Generate the initialization bash script"""
     # Start with base script
-    init_script = """#!/bin/bash
-      set -e
-      set -x
+    init_script = []
+    init_script.extend(["""#!/bin/bash
+set -e
+set -x
       
-      # Ensure the workspace directory exists
-      mkdir -p /workspaces
+# Ensure the workspace directory exists
+mkdir -p /workspaces
 
-      # Change to the workspace directory
-      cd /workspaces
+# Change to the workspace directory
+cd /workspaces
 
-      # Configure git to use GITHUB_TOKEN for private repos
-      if [ ! -z "$GITHUB_TOKEN" ]; then
-        echo "Using GITHUB_TOKEN for private repo access"
-        git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
-      fi
-    """
+# Configure git to use GITHUB_TOKEN for private repos
+if [ ! -z "$GITHUB_TOKEN" ]; then
+    echo "Using GITHUB_TOKEN for private repo access"
+    git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
+fi
+"""])
 
     repo_names = []
 
@@ -462,7 +463,7 @@ def _generate_workspace_script(workspace_ids, workspace_config):
         branch = workspace_config['github_branches'][i] if i < len(workspace_config['github_branches']) else ""
             
         if branch:
-            init_script += f"""
+            init_script.extend([f"""
         # Clone repository {i+1}: {repo_url} (branch: {branch})
         if [ ! -d "/workspaces/{folder_name}" ]; then
             echo "Cloning {repo_url} branch {branch} into {folder_name}..."
@@ -471,9 +472,9 @@ def _generate_workspace_script(workspace_ids, workspace_config):
 
         # Mark repo as safe
         git config --global --add safe.directory "/workspaces/{folder_name}"
-        """
+        """])
         else:
-            init_script += f"""
+            init_script.extend([f"""
         # Clone repository {i+1}: {repo_url} (default branch)
         if [ ! -d "/workspaces/{folder_name}" ]; then
             echo "Cloning {repo_url} into {folder_name}..."
@@ -482,26 +483,26 @@ def _generate_workspace_script(workspace_ids, workspace_config):
 
         # Mark repo as safe
         git config --global --add safe.directory "/workspaces/{folder_name}"
-        """
+        """])
 
         # 🔐 Set the remote URL with GITHUB_TOKEN
-        init_script += f"""
+        init_script.extend([f"""
         # Set Git remote URL to use GITHUB_TOKEN
         if [ ! -z "$GITHUB_TOKEN" ]; then
             cd /workspaces/{folder_name}
             git remote set-url origin https://$GITHUB_TOKEN@github.com/{owner}/{folder_name}.git
             cd ..
         fi
-        """
+        """])
 
     # Add custom image building section if required
     if workspace_config['use_custom_image_url']:
-        init_script += _generate_custom_image_script(workspace_ids, workspace_config)
+        init_script.extend([_generate_custom_image_script(workspace_ids, workspace_config)])
 
     # Add standard initialization code
-    init_script += _generate_standard_init_code(repo_names)
+    init_script.extend([_generate_standard_init_code(repo_names)])
     
-    return init_script
+    return "\n".join(init_script)
 
 def _generate_standard_init_code(repo_names):
     """Generate standard initialization code common to all workspaces"""
@@ -549,17 +550,13 @@ alias d='docker'
 alias dc='docker-compose'
 alias dps='docker ps'
 alias di='docker images'
-EOF
 
 touch /workspaces/.code-server-initialized
 
 # Initialize workspace
 echo "Workspace initialized successfully!"
+EOF
 
-      touch /workspaces/.code-server-initialized
-
-      # Initialize workspace
-      echo "Workspace initialized successfully!"
   """
     
     return script
@@ -567,38 +564,49 @@ echo "Workspace initialized successfully!"
 
 def _generate_custom_image_script(workspace_ids, workspace_config):
     """Generate script for custom image handling"""
-    return f"""
-        # Create directory for custom image
-        mkdir -p /workspaces/.custom-image
-        cd /workspaces/.custom-image
-        
-        # Download custom image configuration
-        echo "Downloading custom image configuration from {workspace_config['custom_image_url']}..."
-        if [[ "{workspace_config['custom_image_url']}" == *github* ]]; then
-            # If it's a GitHub URL, use special handling
-            if [[ "{workspace_config['custom_image_url']}" == *.git ]]; then
-                # It's a Git repository
-                git clone {workspace_config['custom_image_url']} .
-            else:
-                # It might be a direct file or directory URL
-                # Convert github.com URLs to raw.githubusercontent.com if needed
-                RAW_URL=$(echo "{workspace_config['custom_image_url']}" | sed 's|github.com|raw.githubusercontent.com|g' | sed 's|/blob/|/|g')
-                curl -L "$RAW_URL" -o dockerfile.zip
-                unzip dockerfile.zip
-                rm dockerfile.zip
-            fi
-        else:
-            # Regular URL to a file
-            curl -L "{workspace_config['custom_image_url']}" -o image-config.zip
-            unzip image-config.zip
-            rm image-config.zip
-        fi
-        
-        # Check if there's a Dockerfile
-        if [ ! -f "Dockerfile" ]; then
-            echo "Error: No Dockerfile found in the downloaded configuration"
-            echo "Using default image instead: linuxserver/code-server:latest"
-            touch /workspaces/.use-default-image
-        fi
-    """
+    init_script = []
+    init_script.extend([f"""
+# Create and enter custom image directory
+mkdir -p /workspaces/.custom-image
+cd /workspaces/.custom-image
+
+# Download custom image configuration
+cat << 'EOF_DOWNLOAD' > download-image.sh
+#!/bin/bash
+set -e
+
+URL="{workspace_config['custom_image_url']}"
+echo "Downloading custom image configuration from $URL..."
+
+if [[ "$URL" == *github* ]]; then
+    if [[ "$URL" == *.git ]]; then
+        # Git repository case
+        git clone "$URL" .
+    else
+        # GitHub file/directory URL case
+        RAW_URL=$(echo "$URL" | sed 's|github.com|raw.githubusercontent.com|g' | sed 's|/blob/|/|g')
+        curl -L "$RAW_URL" -o dockerfile.zip
+        unzip dockerfile.zip
+        rm dockerfile.zip
+    fi
+else
+    # Regular URL case
+    curl -L "$URL" -o image-config.zip
+    unzip image-config.zip
+    rm image-config.zip
+fi
+
+# Validate Dockerfile
+if [ ! -f "Dockerfile" ]; then
+    echo "Error: No Dockerfile found in the downloaded configuration"
+    echo "Using default image instead: linuxserver/code-server:latest"
+    touch /workspaces/.use-default-image
+fi
+EOF_DOWNLOAD
+
+chmod +x download-image.sh
+./download-image.sh
+"""])
+    
+    return "\n".join(init_script)
 

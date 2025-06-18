@@ -1399,29 +1399,27 @@ echo "Feature installation completed"
 
     def _create_wrapper_dockerfile(self, workspace_ids: dict) -> str:
         """Create a wrapper Dockerfile using the user's image as a base."""
-        return f"""
-        cat > Dockerfile << 'EOF'
-        FROM {self.aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}
+        return f"""cat > Dockerfile << 'EOF'
+FROM {self.aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}
 
-        RUN git config --global --add safe.directory /workspaces && \
-            git config --global --add safe.directory '*'
+RUN git config --global --add safe.directory /workspaces && \\
+    git config --global --add safe.directory '*'
 
-        RUN apt-get update && apt-get install -y \
-            curl \
-            git \
-            gnupg2 \
-            jq \
-            procps \
-            lsb-release \
-            sudo \
-            tmux \
-            vim \
-            && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \\
+    curl \\
+    git \\
+    gnupg2 \\
+    jq \\
+    procps \\
+    lsb-release \\
+    sudo \\
+    tmux \\
+    vim \\
+    && rm -rf /var/lib/apt/lists/*
 
-        RUN curl -fsSL https://code-server.dev/install.sh | sh
+RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-        EXPOSE 8444
+EXPOSE 8444
 
-        ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
-        EOF
-        """
+ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
+EOF"""
