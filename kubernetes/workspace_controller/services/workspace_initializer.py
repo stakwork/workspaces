@@ -533,7 +533,7 @@ class WorkspaceInitializer:
         
         deployment = client.V1Deployment(
             metadata=client.V1ObjectMeta(
-                name="code-server",
+                name="workspace",
                 namespace=workspace_ids['namespace_name'],
                 labels={
                     "app": "workspace",
@@ -543,12 +543,12 @@ class WorkspaceInitializer:
             spec=client.V1DeploymentSpec(
                 replicas=1,
                 selector=client.V1LabelSelector(
-                    match_labels={"app": "code-server"}
+                    match_labels={"app": "workspace"}
                 ),
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(
                         labels={
-                            "app": "code-server",
+                            "app": "workspace",
                             "allowed-registry-access": "true"
                         }
                     ),
@@ -574,7 +574,7 @@ class WorkspaceInitializer:
         """Create the workspace service"""
         service = client.V1Service(
             metadata=client.V1ObjectMeta(
-                name="code-server",
+                name="workspace",
                 namespace=workspace_ids['namespace_name']
             ),
             spec=client.V1ServiceSpec(
@@ -582,10 +582,10 @@ class WorkspaceInitializer:
                     client.V1ServicePort(
                         port=8443,
                         target_port=8443,
-                        name="code-server"
+                        name="workspace"
                     )
                 ],
-                selector={"app": "code-server"}
+                selector={"app": "workspace"}
             )
         )
         self.core_v1.create_namespaced_service(
@@ -596,7 +596,7 @@ class WorkspaceInitializer:
         fqdn = workspace_ids.get('fqdn', f"{workspace_ids.get('subdomain')}.{self.workspace_domain}")
         ingress = client.V1Ingress(
             metadata=client.V1ObjectMeta(
-                name="code-server",
+                name="workspace",
                 namespace=workspace_ids['namespace_name'],
                 annotations={
                     "kubernetes.io/ingress.class": "nginx",
@@ -621,7 +621,7 @@ class WorkspaceInitializer:
                                     path_type="Prefix",
                                     backend=client.V1IngressBackend(
                                         service=client.V1IngressServiceBackend(
-                                            name="code-server",
+                                            name="workspace",
                                             port=client.V1ServiceBackendPort(
                                                 number=8443
                                             )
@@ -820,7 +820,7 @@ class WorkspaceInitializer:
     def _create_code_server_container(self, workspace_ids: dict, workspace_config: dict) -> client.V1Container:
         """Create the main code-server container"""
         return client.V1Container(
-            name="code-server",
+            name="workspace",
             image=f"{self.aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             image_pull_policy="Always",
             env=[

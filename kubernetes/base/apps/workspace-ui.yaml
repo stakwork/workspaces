@@ -259,12 +259,14 @@ data:
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">VM ID</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ready Replicas</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access URL</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access Details</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Used</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody class="bg-white divide-y divide-gray-200"></tbody>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <!-- VMs will be populated here dynamically -->
+                            </tbody>
                         </table>
                     </div>
                     <button onclick="closePoolContent()" class="mt-4 bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Close</button>
@@ -1133,6 +1135,9 @@ data:
                     // Count available and in-use VMs
                     const availableVMs = data.workspaces.filter(vm => !vm.in_use).length;
                     const inUseVMs = data.workspaces.filter(vm => vm.in_use).length;
+                    const accessUrl = data.workspaces.length > 0 ? data.workspaces[0].fqdn : '';
+                    const password = data.workspaces.length > 0 ? data.workspaces[0].password : '';
+                    const replicas = data.workspaces.length;
                     
                     // Update the pool information with the VM counts
                     return {
@@ -1434,22 +1439,54 @@ data:
                     const tbody = document.querySelector('#vmsTable tbody');
                     tbody.innerHTML = '';
                     poolVMs.workspaces.forEach(vm => {
-                        const accessUrl = vm.fqdn || (vm.fqdn ? `https://${vm.fqdn}` : null);
-                        const password = vm.password && vm.password !== '********' ? vm.password : '';
+                        console.log('VM DATA:', vm); // Debug: log VM object
+                        const accessUrl = vm.fqdn ? `https://${vm.fqdn}` : null;
+                        const password = vm.password || '';
+                        const statusClass = vm.status === 'running' ? 'text-green-600' : 
+                                        vm.status === 'pending' ? 'text-yellow-600' : 
+                                        vm.status === 'failed' ? 'text-red-600' : 'text-gray-600';
                         const tr = document.createElement('tr');
                         tr.innerHTML = `
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${vm.effective_id}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.status}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm ${statusClass} font-medium">${vm.status}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.ready_replicas || '-'}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">
-                                ${accessUrl ? `<a href="${accessUrl}" target="_blank" class="text-blue-500 hover:underline">${accessUrl}</a>` : '-'}
-                                ${password ? `<div class='text-xs text-gray-500 mt-1'>Password: <span class='font-mono bg-gray-100 px-2 py-1 rounded'>${password}</span></div>` : ''}
+                                ${accessUrl ? 
+                                    `<div class="space-y-2">
+                                        <div>
+                                            <a href="${accessUrl}" target="_blank" class="text-blue-500 hover:underline flex items-center">
+                                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                                                </svg>
+                                                ${vm.fqdn}
+                                            </a>
+                                        </div>
+                                        ${password ? 
+                                            `<div class="flex items-center space-x-2">
+                                                <span class="text-xs text-gray-500">Password:</span>
+                                                <code class="text-xs bg-gray-100 px-2 py-1 rounded font-mono">${password}</code>
+                                             </div>` 
+                                            : ''
+                                        }
+                                    </div>` 
+                                    : '-'
+                                }
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">${vm.last_used ? new Date(vm.last_used).toLocaleString() : '-'}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm">
                                 ${!vm.in_use
-                                    ? `<button onclick="markVMAsUsed('${poolName}','${vm.effective_id}')" class="bg-green-500 text-white px-3 py-1 rounded-md text-xs hover:bg-green-600">Use VM</button>`
-                                    : `<button onclick="releaseVM('${poolName}','${vm.effective_id}')" class="bg-yellow-500 text-white px-3 py-1 rounded-md text-xs hover:bg-yellow-600">Release</button>`
+                                    ? `<button onclick="markVMAsUsed('${poolName}','${vm.effective_id}')" class="bg-green-500 text-white px-3 py-1 rounded-md text-xs hover:bg-green-600 flex items-center">
+                                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/>
+                                        </svg>
+                                        Use VM
+                                      </button>`
+                                    : `<button onclick="releaseVM('${poolName}','${vm.effective_id}')" class="bg-yellow-500 text-white px-3 py-1 rounded-md text-xs hover:bg-yellow-600 flex items-center">
+                                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/>
+                                        </svg>
+                                        Release
+                                      </button>`
                                 }
                             </td>
                         `;
