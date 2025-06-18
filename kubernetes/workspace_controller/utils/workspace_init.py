@@ -551,6 +551,11 @@ alias dps='docker ps'
 alias di='docker images'
 EOF
 
+touch /workspaces/.code-server-initialized
+
+# Initialize workspace
+echo "Workspace initialized successfully!"
+
       touch /workspaces/.code-server-initialized
 
       # Initialize workspace
