@@ -683,9 +683,9 @@ data:
                                         ${workspace.id ? `<p class="mt-1 text-xs text-gray-500">ID: ${workspace.id}</p>` : ''}
                                         ${workspace.fqdn ? `<p class="mt-1 text-xs text-gray-500">Subdomain: ${workspace.fqdn}</p>` : ''}
                                         ${imageInfoHtml}
-                                        ${workspace.url ? `
+                                        ${workspace.fqdn ? `
                                         <p class="mt-2">
-                                            <a href="${workspace.url}" target="_blank" class="text-blue-500 hover:underline">
+                                            <a href="https://${workspace.fqdn}" target="_blank" class="text-blue-500 hover:underline">
                                                 Open Workspace
                                             </a>
                                         </p>
@@ -1434,7 +1434,7 @@ data:
                     const tbody = document.querySelector('#vmsTable tbody');
                     tbody.innerHTML = '';
                     poolVMs.workspaces.forEach(vm => {
-                        const accessUrl = vm.url || (vm.fqdn ? `https://${vm.fqdn}` : null);
+                        const accessUrl = vm.fqdn || (vm.fqdn ? `https://${vm.fqdn}` : null);
                         const password = vm.password && vm.password !== '********' ? vm.password : '';
                         const tr = document.createElement('tr');
                         tr.innerHTML = `

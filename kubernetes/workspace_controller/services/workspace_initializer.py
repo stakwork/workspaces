@@ -1392,8 +1392,8 @@ echo "Feature installation completed"
             fi
         else
             echo "Warning: No Dockerfile found at $DOCKERFILE_PATH"
-            echo "Using default Go dev container image instead"
-            echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+            echo "Using default linuxserver/code-server image instead"
+            echo "FROM linuxserver/code-server:latest" > /workspaces/.user-dockerfile/Dockerfile
         fi
         """
 

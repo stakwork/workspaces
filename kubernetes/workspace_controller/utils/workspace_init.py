@@ -25,8 +25,52 @@ set -e
 # Initialize error counter
 ERROR_COUNT=0
 
+# Function to install development tools based on devcontainer content
+function install_dev_tools() {{
+    local config_file="$1"
+    if [ ! -f "$config_file" ]; then
+        return 0
+    fi
+
+    echo "Checking for required development tools..."
+    
+    # Install common build dependencies
+    apt-get update && apt-get install -y \
+        build-essential \
+        pkg-config \
+        git \
+        curl \
+        wget \
+        unzip \
+        jq \
+        tmux \
+        ca-certificates \
+        libssl-dev \
+        openssl \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Check if we need Rust/Cargo
+    echo "Installing Rust and Cargo..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+
+    echo "Installing Node.js and npm..."
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+    apt-get update && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+
+    echo "Installing Python and pip..."
+    apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
+    
+
+    echo "Installing Go..."
+    apt-get update && apt-get install -y golang && rm -rf /var/lib/apt/lists/*
+
+    echo "Development tools installation completed"
+}}
+
 # Create necessary directories
 mkdir -p /workspaces/.user-dockerfile
+mkdir -p /workspaces/.code-server-wrapper         
 cd /workspaces
 
 # Clone repository first
@@ -67,6 +111,9 @@ if [ -d "$USER_REPO_PATH" ]; then
             apt-get update && apt-get install -y jq tmux
         fi
         
+        # Install required development tools based on devcontainer content
+        install_dev_tools "$DEVCONTAINER_JSON_PATH"
+        
         # Process and install features first
         FEATURES=$(jq -r '.features // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
         if [ ! -z "$FEATURES" ]; then
@@ -78,10 +125,9 @@ if [ -d "$USER_REPO_PATH" ]; then
             if [ -f /workspaces/install-features.sh ]; then
                 chmod +x /workspaces/install-features.sh
                 /workspaces/install-features.sh
-                
             fi
         fi
-        
+
         # Process environment variables
         ENV_VARS=$(jq -r '.containerEnv // empty | to_entries[] | "\(.key)=\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
         if [ ! -z "$ENV_VARS" ]; then
@@ -100,7 +146,10 @@ if [ -d "$USER_REPO_PATH" ]; then
             echo "Creating post-create command script"
             echo "#!/bin/bash" > /workspaces/post-create-command.sh
             echo "set -e" >> /workspaces/post-create-command.sh
-            echo "#!/bin/bash" >> /workspaces/post-create-command.sh
+            # Source environment setups
+            echo "source ~/.cargo/env 2>/dev/null || true" >> /workspaces/post-create-command.sh
+            echo "source ~/.nvm/nvm.sh 2>/dev/null || true" >> /workspaces/post-create-command.sh
+            echo "source ~/.profile 2>/dev/null || true" >> /workspaces/post-create-command.sh
             echo "$POST_CREATE" >> /workspaces/post-create-command.sh
             chmod +x /workspaces/post-create-command.sh
         fi
@@ -257,8 +306,8 @@ echo "[$(date)] Initialization finished"
             fi
         else
             echo "Warning: No Dockerfile found at $DOCKERFILE_PATH"
-            echo "Using default Go dev container image instead"
-            echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+            echo "Using default linuxserver/code-server image instead"
+            echo "FROM linuxserver/code-server:latest" > /workspaces/.user-dockerfile/Dockerfile
         fi
         """
     ])
