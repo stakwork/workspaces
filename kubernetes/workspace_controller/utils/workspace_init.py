@@ -67,42 +67,41 @@ if [ -d "$USER_REPO_PATH" ]; then
             apt-get update && apt-get install -y jq tmux
         fi
         
-        # Check for predefined image in devcontainer.json
-        IMAGE=$(jq -r '.image // empty' "$DEVCONTAINER_JSON_PATH")
-        if [ ! -z "$IMAGE" ]; then
-            echo "Using predefined image from devcontainer.json: $IMAGE"
-            echo "FROM $IMAGE" > /workspaces/.user-dockerfile/Dockerfile
-        elif [ -f "$DOCKERFILE_PATH" ]; then
-            echo "Found Dockerfile, copying to workspace"
-            cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
-        else
-            echo "No image or Dockerfile found, using default Go image"
-            echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+        # Process and install features first
+        FEATURES=$(jq -r '.features // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+        if [ ! -z "$FEATURES" ]; then
+            echo "Found features in devcontainer.json"
+            echo "$FEATURES" > /workspaces/.devcontainer-features
+            
+            # Install features immediately
+            echo "Installing features..."
+            if [ -f /workspaces/install-features.sh ]; then
+                chmod +x /workspaces/install-features.sh
+                /workspaces/install-features.sh
+                
+            fi
         fi
         
-        # Process extensions
-        EXTENSIONS=$(jq -r '.customizations.vscode.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
-        if [ ! -z "$EXTENSIONS" ]; then
-            echo "$EXTENSIONS" > /workspaces/.extensions-list
+        # Process environment variables
+        ENV_VARS=$(jq -r '.containerEnv // empty | to_entries[] | "\(.key)=\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+        if [ ! -z "$ENV_VARS" ]; then
+            echo "$ENV_VARS" > /workspaces/.container-env
         fi
         
-        # Process settings
-        SETTINGS=$(jq -r '.customizations.vscode.settings // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
-        if [ ! -z "$SETTINGS" ]; then
-            mkdir -p /workspaces/.vscode
-            echo "$SETTINGS" > /workspaces/.vscode/settings.json
+        # Process remote environment variables
+        REMOTE_ENV_VARS=$(jq -r '.remoteEnv // empty | to_entries[] | "\(.key)=\(.value)"' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
+        if [ ! -z "$REMOTE_ENV_VARS" ]; then
+            echo "$REMOTE_ENV_VARS" > /workspaces/.remote-env
         fi
         
-        # Process remote user
-        REMOTE_USER=$(jq -r '.remoteUser // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
-        if [ ! -z "$REMOTE_USER" ]; then
-            echo "REMOTE_USER=$REMOTE_USER" > /workspaces/.user-config
-        fi
-        
-        # Process post create command
+        # Process and run post-create command
         POST_CREATE=$(jq -r '.postCreateCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
         if [ ! -z "$POST_CREATE" ]; then
-            echo "$POST_CREATE" > /workspaces/post-create-command.sh
+            echo "Creating post-create command script"
+            echo "#!/bin/bash" > /workspaces/post-create-command.sh
+            echo "set -e" >> /workspaces/post-create-command.sh
+            echo "#!/bin/bash" >> /workspaces/post-create-command.sh
+            echo "$POST_CREATE" >> /workspaces/post-create-command.sh
             chmod +x /workspaces/post-create-command.sh
         fi
     else
@@ -548,3 +547,4 @@ def _generate_custom_image_script(workspace_ids, workspace_config):
             touch /workspaces/.use-default-image
         fi
     """
+

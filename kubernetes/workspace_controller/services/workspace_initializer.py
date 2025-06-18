@@ -161,7 +161,8 @@ class WorkspaceInitializer:
         git config --global --add safe.directory /workspaces/{repo_name}
     fi
     """
- 
+            
+            
 
             # Handle namespace conflict
             try:
@@ -726,11 +727,6 @@ class WorkspaceInitializer:
             volume_mounts=[
                 client.V1VolumeMount(
                     name="workspace-data",
-                    mount_path="/config",
-                    sub_path="config"
-                ),
-                client.V1VolumeMount(
-                    name="workspace-data",
                     mount_path="/workspaces",
                     sub_path="workspaces"
                 ),
@@ -753,7 +749,8 @@ class WorkspaceInitializer:
                             optional=True
                         )
                     )
-                )
+                ),
+                client.V1EnvVar(name="DOCKER_CONFIG", value="/kaniko/.docker/")
             ]
         )
 
@@ -769,7 +766,10 @@ class WorkspaceInitializer:
                 "--insecure",
                 "--skip-tls-verify",
                 "--verbosity=debug",
-                "--push-retry=3"
+                "--push-retry=3",
+                "--snapshotMode=time",  # More reliable snapshot mode
+                "--use-new-run",  # New more stable run implementation
+                "--cleanup"  # Clean up after build
             ],
             env=[
                 client.V1EnvVar(name="DOCKER_CONFIG", value="/kaniko/.docker/"),
@@ -797,12 +797,16 @@ class WorkspaceInitializer:
                 "--insecure",
                 "--skip-tls-verify",
                 "--verbosity=debug",
-                "--push-retry=3"
+                "--push-retry=3",
+                "--snapshotMode=time",
+                "--use-new-run",
+                "--cleanup"
             ],
             env=[
                 client.V1EnvVar(name="DOCKER_CONFIG", value="/kaniko/.docker/"),
                 client.V1EnvVar(name="HTTP_TIMEOUT", value="600s"),
-                client.V1EnvVar(name="HTTPS_TIMEOUT", value="600s")
+                client.V1EnvVar(name="HTTPS_TIMEOUT", value="600s"),
+                client.V1EnvVar(name="BASE_IMAGE", value=f"{self.aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}")
             ],
             volume_mounts=[
                 client.V1VolumeMount(
@@ -1401,6 +1405,18 @@ echo "Feature installation completed"
 
         RUN git config --global --add safe.directory /workspaces && \
             git config --global --add safe.directory '*'
+
+        RUN apt-get update && apt-get install -y \
+            curl \
+            git \
+            gnupg2 \
+            jq \
+            procps \
+            lsb-release \
+            sudo \
+            tmux \
+            vim \
+            && rm -rf /var/lib/apt/lists/*
 
         RUN curl -fsSL https://code-server.dev/install.sh | sh
 
