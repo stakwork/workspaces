@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Load environment variables
-if [[ -f ../../.env ]]; then
+if [[ -f ../../../.env ]]; then
   set -a
-  source ../../.env
+  source ../../../.env
   set +a
 else
   echo "❌ .env file not found!"
@@ -23,10 +23,11 @@ docker buildx build --platform linux/amd64 --push \
 
 export DEPLOYMENT_TAG=$TAG
 
-envsubst < ./k8s/deployment.yaml > ./k8s/deployment-generated.yaml
+envsubst < ../k8s/deployment.yaml > ../k8s/deployment-generated.yaml
 
 echo "🚀 Applying deployment to cluster..."
-kubectl apply -f ./k8s/deployment-generated.yaml
+kubectl apply -f ../k8s/deployment-generated.yaml
+kubectl apply -f ../../base/apps/workspace-ui.yaml
 
 echo "⏳ Waiting for rollout to complete..."
 kubectl rollout status deployment/workspace-controller -n workspace-system

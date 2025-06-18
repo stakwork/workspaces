@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py .
+COPY . .
 
 # Run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:3000", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:3000", "wsgi:app"]
