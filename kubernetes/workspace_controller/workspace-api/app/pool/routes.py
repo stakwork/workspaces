@@ -136,7 +136,7 @@ def get_available_workspace(current_user, pool_name):
                 "success": False,
                 "message": "No available workspace in pool",
                 "workspace": None
-            }), 404
+            })
             
     except ValueError as e:
         logger.warning(f"Pool not found: {e}")
