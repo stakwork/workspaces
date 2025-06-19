@@ -902,6 +902,10 @@ data:
                                                 ${!isRunning || !isUsed ? 'disabled' : ''}>
                                                 Mark Unused
                                             </button>
+                                            <button onclick="deletePoolWorkspace('${poolName}', '${workspace.id}')" 
+                                                class="text-xs py-1 px-2 rounded bg-red-500 text-white hover:bg-red-600">
+                                                Delete
+                                            </button>
                                         </div>
                                     </div>
                                 `;
@@ -925,6 +929,42 @@ data:
                 workspacesEl.classList.add('hidden');
             }
         }
+
+        async function deletePoolWorkspace(poolName, workspaceId) {
+            if (!confirm(`Are you sure you want to delete Pod "${workspaceId}" from pool "${poolName}"? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}/workspaces/${workspaceId}`, {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    alert(`Pod "${workspaceId}" deleted successfully`);
+                    // Refresh both the pools list and the expanded workspaces view
+                    loadPools();
+                    // Re-expand the pool workspaces if they were visible
+                    setTimeout(() => {
+                        const workspacesEl = document.getElementById(`pool-workspaces-${poolName.replace(/[^a-zA-Z0-9]/g, '-')}`);
+                        if (workspacesEl && !workspacesEl.classList.contains('hidden')) {
+                            togglePoolWorkspaces(poolName);
+                            setTimeout(() => togglePoolWorkspaces(poolName), 100);
+                        }
+                    }, 500);
+                } else {
+                    alert(`Error: ${data.error || 'Failed to delete Pod'}`);
+                }
+            } catch (error) {
+                console.error('Error deleting Pod from pool:', error);
+                if (error.message !== 'Authentication required') {
+                    alert('Failed to delete Pod. Please try again later.');
+                }
+            }
+        }
+
 
         // Function to get an available workspace from pool
         async function getAvailableWorkspace(poolName) {

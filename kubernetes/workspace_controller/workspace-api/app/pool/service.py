@@ -759,6 +759,80 @@ class PoolService:
         
         logger.info(f"Stopped monitoring pool '{pool_name}'")
 
+    def get_pool_workspaces(self, pool_name: str) -> Dict:
+        """Get all workspaces in a pool"""
+        if pool_name not in self.pools:
+            raise ValueError(f"Pool '{pool_name}' not found")
+        
+        try:
+            workspaces = self._get_pool_workspaces(pool_name)
+            
+            return {
+                "success": True,
+                "pool_name": pool_name,
+                "workspaces": workspaces,
+                "total_count": len(workspaces)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting workspaces for pool '{pool_name}': {e}")
+            raise Exception(f"Failed to get pool workspaces: {str(e)}")
+
+    def delete_workspace_from_pool(self, pool_name: str, workspace_id: str) -> Dict:
+        """Delete a specific workspace from a pool"""
+        if pool_name not in self.pools:
+            raise ValueError(f"Pool '{pool_name}' not found")
+        
+        try:
+            # Find the workspace namespace
+            namespace_name = f"workspace-{workspace_id}"
+            
+            # Verify the workspace belongs to this pool
+            try:
+                namespace = self.core_v1.read_namespace(namespace_name)
+                pool_label = sanitize_k8s_label(pool_name)
+                if namespace.metadata.labels.get('pool') != pool_label:
+                    raise ValueError(f"Workspace '{workspace_id}' does not belong to pool '{pool_name}'")
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    raise ValueError(f"Workspace '{workspace_id}' not found")
+                raise
+            
+            # Delete the workspace using the workspace service
+            result = workspace_service.delete_workspace(workspace_id)
+            
+            if not result.get('success', False):
+                raise Exception(f"Failed to delete workspace: {result.get('error', 'Unknown error')}")
+            
+            logger.info(f"Deleted workspace '{workspace_id}' from pool '{pool_name}'")
+            
+            # Trigger pool scaling to maintain minimum VMs (if needed)
+            # This will be done asynchronously by the monitoring thread, but we can also trigger it immediately
+            try:
+                scaling_lock = self.scaling_locks.get(pool_name)
+                if scaling_lock and scaling_lock.acquire(blocking=False):
+                    try:
+                        # Schedule scaling to happen soon (after a short delay to allow cleanup)
+                        threading.Timer(5.0, self._scale_pool, args=[pool_name]).start()
+                    finally:
+                        scaling_lock.release()
+            except Exception as e:
+                logger.warning(f"Could not trigger immediate scaling for pool '{pool_name}': {e}")
+            
+            return {
+                "success": True,
+                "message": f"Workspace '{workspace_id}' deleted from pool '{pool_name}'",
+                "workspace_id": workspace_id,
+                "pool_name": pool_name
+            }
+            
+        except ValueError as ve:
+            # Re-raise validation errors as-is
+            raise ve
+        except Exception as e:
+            logger.error(f"Error deleting workspace '{workspace_id}' from pool '{pool_name}': {e}")
+            raise Exception(f"Failed to delete workspace from pool: {str(e)}")
+
 
 # Global service instance
 pool_service = PoolService()

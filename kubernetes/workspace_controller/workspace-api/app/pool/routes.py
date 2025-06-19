@@ -232,3 +232,20 @@ def get_workspace_usage(current_user, pool_name, workspace_id):
     except Exception as e:
         logger.error(f"Error in get_workspace_usage: {e}")
         return jsonify({"error": str(e)}), 500
+
+@pool_bp.route('/<pool_name>/workspaces/<workspace_id>', methods=['DELETE'])
+@token_required
+def delete_pool_workspace(current_user, pool_name, workspace_id):
+    """Delete a workspace from a pool"""
+    try:
+        pool_name = unquote(pool_name)
+        
+        result = pool_service.delete_workspace_from_pool(pool_name, workspace_id)
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.warning(f"Validation error in delete_pool_workspace: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in delete_pool_workspace: {e}")
+        return jsonify({"error": str(e)}), 500
