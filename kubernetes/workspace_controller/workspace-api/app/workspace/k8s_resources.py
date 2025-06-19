@@ -550,11 +550,11 @@ def _create_code_server_container(workspace_ids, workspace_config):
         ),
         resources=client.V1ResourceRequirements(
             requests={
-                "cpu": "4",
+                "cpu": "2",
                 "memory": "8Gi"
             },
             limits={
-                "cpu": "4",
+                "cpu": "2",
                 "memory": "8Gi"
             }
         )

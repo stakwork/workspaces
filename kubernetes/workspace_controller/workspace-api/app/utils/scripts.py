@@ -13,6 +13,9 @@ def create_post_start_command():
                 echo "Starting post-start initialization at $(date)"
                 echo "RUNNING" > /workspaces/setup-status
 
+                git config --global --add safe.directory /workspaces
+                git config --global --add safe.directory /workspaces/*
+
                 # Detect OS distribution
                 if [ -f /etc/os-release ]; then
                     . /etc/os-release
@@ -518,6 +521,9 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
     cat > Dockerfile << 'EOF'
 # This will be replaced with the tag for the user's custom image
 FROM {aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}
+
+RUN git config --global --add safe.directory /workspaces && \
+    git config --global --add safe.directory '*'
 
 # Install code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh
