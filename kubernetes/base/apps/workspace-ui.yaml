@@ -487,19 +487,19 @@ data:
                     alert(`Workspace marked as used by ${data.user_info}`);
                     loadPools(); // Refresh the pools list
                 } else {
-                    alert(`Error: ${data.error || 'Failed to mark workspace as used'}`);
+                    alert(`Error: ${data.error || 'Failed to mark Pod as used'}`);
                 }
             } catch (error) {
-                console.error('Error marking workspace as used:', error);
+                console.error('Error marking Pod as used:', error);
                 if (error.message !== 'Authentication required') {
-                    alert('Failed to mark workspace as used. Please try again later.');
+                    alert('Failed to mark Pod as used. Please try again later.');
                 }
             }
         }
 
         // Function to mark workspace as unused
         async function markWorkspaceAsUnused(poolName, workspaceId) {
-            if (!confirm('Mark this workspace as unused?')) return;
+            if (!confirm('Mark this Pod as unused?')) return;
             
             try {
                 const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}/workspaces/${workspaceId}/mark-unused`, {
@@ -512,15 +512,15 @@ data:
                 const data = await response.json();
                 
                 if (response.ok && data.success) {
-                    alert('Workspace marked as unused');
+                    alert('Pod marked as unused');
                     loadPools(); // Refresh the pools list
                 } else {
-                    alert(`Error: ${data.error || 'Failed to mark workspace as unused'}`);
+                    alert(`Error: ${data.error || 'Failed to mark Pod as unused'}`);
                 }
             } catch (error) {
-                console.error('Error marking workspace as unused:', error);
+                console.error('Error marking Pod as unused:', error);
                 if (error.message !== 'Authentication required') {
-                    alert('Failed to mark workspace as unused. Please try again later.');
+                    alert('Failed to mark Pod as unused. Please try again later.');
                 }
             }
         }
@@ -666,7 +666,7 @@ data:
                                     ${imageInfoHtml}
                                     <p class="mt-2">
                                         <a href="${workspace.url}" target="_blank" class="text-blue-500 hover:underline">
-                                            Open Workspace
+                                            Open Pod
                                         </a>
                                     </p>
                                 </div>
@@ -694,13 +694,13 @@ data:
                         workspacesList.appendChild(workspaceEl);
                     });
                 } else {
-                    workspacesList.innerHTML = '<p class="text-gray-500">No workspaces found. Create one to get started.</p>';
+                    workspacesList.innerHTML = '<p class="text-gray-500">No Pods found. Create one to get started.</p>';
                 }
             } catch (error) {
-                console.error('Error loading workspaces:', error);
+                console.error('Error loading Pods:', error);
                 if (error.message !== 'Authentication required') {
                     document.getElementById('workspacesList').innerHTML = 
-                        '<p class="text-red-500">Failed to load workspaces. Please try again later.</p>';
+                        '<p class="text-red-500">Failed to load Pods. Please try again later.</p>';
                 }
             }
         }
@@ -741,7 +741,7 @@ data:
                                     </div>
                                     <div class="mt-2">
                                         <button onclick="togglePoolWorkspaces('${pool.pool_name}')" class="text-blue-500 hover:underline text-sm">
-                                            View Workspaces (${pool.current_vms})
+                                            View Pods (${pool.current_vms})
                                         </button>
                                     </div>
                                 </div>
@@ -789,7 +789,7 @@ data:
             const branchName = document.getElementById('poolBranchName').value.trim();
             const githubPat = document.getElementById('poolGithubPat').value.trim();
             
-            if (!poolName || !repoName || !branchName || !githubPat) {
+            if (!poolName || !repoName || !branchName) {
                 alert('Please fill in all required fields');
                 return;
             }
@@ -823,7 +823,7 @@ data:
                         <p>Pool Name: ${poolName}</p>
                         <p>Repository: ${repoName} (${branchName})</p>
                         <p>Minimum VMs: ${minimumVms}</p>
-                        <p class="text-sm mt-2">The pool will automatically create and maintain the minimum number of workspaces.</p>
+                        <p class="text-sm mt-2">The pool will automatically create and maintain the minimum number of pods.</p>
                     `;
                     
                     // Reset form
@@ -857,7 +857,7 @@ data:
                     const data = await response.json();
                     
                     if (response.ok && data.workspaces) {
-                        let workspacesHtml = '<h4 class="font-medium text-gray-700 mb-2">Pool Workspaces:</h4>';
+                        let workspacesHtml = '<h4 class="font-medium text-gray-700 mb-2">Pool Pods:</h4>';
                         
                         if (data.workspaces.length > 0) {
                             workspacesHtml += '<div class="grid grid-cols-1 lg:grid-cols-2 gap-3">';
@@ -878,7 +878,7 @@ data:
                                             </div>
                                         </div>
                                         <div class="text-xs text-gray-500 mb-2">
-                                            <a href="${workspace.url}" target="_blank" class="text-blue-500 hover:underline">Open Workspace</a>
+                                            <a href="${workspace.url}" target="_blank" class="text-blue-500 hover:underline">Open Pod</a>
                                         </div>
                                         <div class="text-xs text-gray-400 mb-2">Password: ${workspace.password}</div>
                                         ${workspace.marked_at ? `<div class="text-xs text-gray-400 mb-2">Marked: ${new Date(workspace.marked_at).toLocaleString()}</div>` : ''}
@@ -899,7 +899,7 @@ data:
                             });
                             workspacesHtml += '</div>';
                         } else {
-                            workspacesHtml += '<p class="text-gray-500 text-sm">No workspaces in this pool yet.</p>';
+                            workspacesHtml += '<p class="text-gray-500 text-sm">No Pods in this pool yet.</p>';
                         }
                         
                         workspacesEl.innerHTML = workspacesHtml;
@@ -907,8 +907,8 @@ data:
                     
                     workspacesEl.classList.remove('hidden');
                 } catch (error) {
-                    console.error('Error loading pool workspaces:', error);
-                    workspacesEl.innerHTML = '<p class="text-red-500 text-sm">Failed to load workspaces.</p>';
+                    console.error('Error loading pool pods:', error);
+                    workspacesEl.innerHTML = '<p class="text-red-500 text-sm">Failed to load Pods.</p>';
                     workspacesEl.classList.remove('hidden');
                 }
             } else {
@@ -925,18 +925,18 @@ data:
                 
                 if (response.ok && data.success && data.workspace) {
                     const workspace = data.workspace;
-                    const message = `Available workspace found!\n\nID: ${workspace.id}\nURL: ${workspace.url}\nState: ${workspace.state}\n\nOpen workspace now?`;
+                    const message = `Available Pod found!\n\nID: ${workspace.id}\nURL: ${workspace.url}\nState: ${workspace.state}\n\nOpen Pod now?`;
                     
                     if (confirm(message)) {
                         window.open(workspace.url, '_blank');
                     }
                 } else {
-                    alert('No available workspace in pool at the moment. Please try again later.');
+                    alert('No available Pod in pool at the moment. Please try again later.');
                 }
             } catch (error) {
-                console.error('Error getting available workspace:', error);
+                console.error('Error getting available Pod:', error);
                 if (error.message !== 'Authentication required') {
-                    alert('Failed to get available workspace. Please try again later.');
+                    alert('Failed to get available Pod. Please try again later.');
                 }
             }
         }
@@ -977,7 +977,7 @@ data:
 
         // Function to delete a pool
         async function deletePool(poolName) {
-            if (!confirm(`Are you sure you want to delete pool "${poolName}"? This will delete all workspaces in the pool. This action cannot be undone.`)) {
+            if (!confirm(`Are you sure you want to delete pool "${poolName}"? This will delete all Pods in the pool. This action cannot be undone.`)) {
                 return;
             }
             
@@ -1059,7 +1059,7 @@ data:
             
             const statusEl = document.getElementById('createStatus');
             statusEl.className = 'mt-4 p-4 bg-yellow-100 text-yellow-800 rounded-md';
-            statusEl.innerHTML = 'Creating workspace... This may take a few minutes.';
+            statusEl.innerHTML = 'Creating Pod... This may take a few minutes.';
             statusEl.classList.remove('hidden');
             
             try {
@@ -1116,11 +1116,11 @@ data:
                         }
                         
                         statusEl.innerHTML = `
-                            <p class="font-semibold">Workspace creation initiated!</p>
+                            <p class="font-semibold">Pod creation initiated!</p>
                             ${repoListHtml}
                             ${imageInfoHtml}
                             <p class="mt-2">
-                                <a href="${workspace.url}" target="_blank" class="text-blue-600 hover:underline">Open Workspace</a>
+                                <a href="${workspace.url}" target="_blank" class="text-blue-600 hover:underline">Open Pod</a>
                             </p>
                             <p class="text-xs text-gray-500">Subdomain: ${workspace.fqdn}</p>
                             <p class="mt-1">Password: <code class="bg-gray-100 px-2 py-1 rounded">${workspace.password}</code></p>
@@ -1195,7 +1195,7 @@ data:
 
         // Function to stop a workspace
         async function stopWorkspace(id) {
-            if (!confirm('Stop this workspace?')) return;
+            if (!confirm('Stop this Pod?')) return;
             
             try {
                 const response = await authenticatedFetch(`${API_BASE_URL}/workspaces/${id}/stop`, {
@@ -1208,19 +1208,19 @@ data:
                     loadWorkspaces();
                 } else {
                     const data = await response.json();
-                    alert(`Error: ${data.error || 'Failed to stop workspace'}`);
+                    alert(`Error: ${data.error || 'Failed to stop Pod'}`);
                 }
             } catch (error) {
-                console.error('Error stopping workspace:', error);
+                console.error('Error stopping Pod:', error);
                 if (error.message !== 'Authentication required') {
-                    alert('Failed to stop workspace. Please try again later.');
+                    alert('Failed to stop Pod. Please try again later.');
                 }
             }
         }
 
         // Function to delete a workspace
         async function deleteWorkspace(id) {
-            if (!confirm('Are you sure you want to delete this workspace? This action cannot be undone.')) {
+            if (!confirm('Are you sure you want to delete this Pod? This action cannot be undone.')) {
                 return;
             }
             
@@ -1231,16 +1231,16 @@ data:
                 
                 if (response.ok) {
                     const data = await response.json();
-                    alert(data.message || 'Workspace deleted');
+                    alert(data.message || 'Pod deleted');
                     loadWorkspaces();
                 } else {
                     const data = await response.json();
-                    alert(`Error: ${data.error || 'Failed to delete workspace'}`);
+                    alert(`Error: ${data.error || 'Failed to delete Pod'}`);
                 }
             } catch (error) {
-                console.error('Error deleting workspace:', error);
+                console.error('Error deleting Pod:', error);
                 if (error.message !== 'Authentication required') {
-                    alert('Failed to delete workspace. Please try again later.');
+                    alert('Failed to delete Pod. Please try again later.');
                 }
             }
         }
