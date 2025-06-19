@@ -35,3 +35,4 @@ secrets.auto.tfvars
 .env
 *.pem
 *.key
+.venv
