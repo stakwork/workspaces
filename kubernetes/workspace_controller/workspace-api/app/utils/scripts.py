@@ -494,7 +494,7 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
             fi
             
             # Process devcontainer.json content
-            {_generate_devcontainer_processing_script()}
+            {_generate_devcontainer_processing_script(repo_name)}
         fi
         
         # Check if there's a docker-compose.yml file
@@ -539,9 +539,9 @@ EOF
     return init_script
 
 
-def _generate_devcontainer_processing_script():
+def _generate_devcontainer_processing_script(repo_name):
     """Generate the devcontainer.json processing script"""
-    return """
+    return f"""
             # Extract extensions from devcontainer.json (support both formats)
             EXTENSIONS=$(jq -r '.extensions[]? // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ -z "$EXTENSIONS" ]; then
