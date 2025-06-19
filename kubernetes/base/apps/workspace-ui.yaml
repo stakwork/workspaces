@@ -248,6 +248,10 @@ data:
         let currentUser = null;
         let currentTab = 'workspaces';
 
+        function encodePoolName(poolName) {
+            return encodeURIComponent(poolName);
+        }
+
         // Authentication utilities
         class Auth {
             static getToken() {
@@ -471,7 +475,7 @@ data:
             const userInfo = prompt('Enter your name or identifier (optional):');
             
             try {
-                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}/workspaces/${workspaceId}/mark-used`, {
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}/workspaces/${workspaceId}/mark-used`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -502,7 +506,7 @@ data:
             if (!confirm('Mark this Pod as unused?')) return;
             
             try {
-                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}/workspaces/${workspaceId}/mark-unused`, {
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}/workspaces/${workspaceId}/mark-unused`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -762,7 +766,7 @@ data:
                             <div class="mt-2 text-sm">
                                 <span class="text-gray-600">Last Check: ${new Date(pool.last_check).toLocaleString()}</span>
                             </div>
-                            <div id="pool-workspaces-${pool.pool_name}" class="hidden mt-4 border-t pt-4">
+                            <div id="pool-workspaces-${pool.pool_name.replace(/[^a-zA-Z0-9]/g, '-')}" class="hidden mt-4 border-t pt-4">
                                 <!-- Workspaces will be loaded here -->
                             </div>
                         `;
@@ -791,6 +795,11 @@ data:
             
             if (!poolName || !repoName || !branchName) {
                 alert('Please fill in all required fields');
+                return;
+            }
+
+            if (poolName.includes('/') || poolName.includes(' ') || /[^a-zA-Z0-9_.-]/.test(poolName)) {
+                alert('Pool name should not contain special characters.')
                 return;
             }
             
@@ -848,12 +857,12 @@ data:
 
         // Function to toggle pool workspaces visibility
         async function togglePoolWorkspaces(poolName) {
-            const workspacesEl = document.getElementById(`pool-workspaces-${poolName}`);
+            const workspacesEl = document.getElementById(`pool-workspaces-${poolName.replace(/[^a-zA-Z0-9]/g, '-')}`);
             
             if (workspacesEl.classList.contains('hidden')) {
                 // Load and show workspaces
                 try {
-                    const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}/workspaces`);
+                    const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}/workspaces`);
                     const data = await response.json();
                     
                     if (response.ok && data.workspaces) {
@@ -920,7 +929,7 @@ data:
         // Function to get an available workspace from pool
         async function getAvailableWorkspace(poolName) {
             try {
-                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}/workspace`);
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}/workspace`);
                 const data = await response.json();
                 
                 if (response.ok && data.success && data.workspace) {
@@ -949,7 +958,7 @@ data:
             }
             
             try {
-                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}/scale`, {
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}/scale`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -982,7 +991,7 @@ data:
             }
             
             try {
-                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${poolName}`, {
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}`, {
                     method: 'DELETE'
                 });
                 

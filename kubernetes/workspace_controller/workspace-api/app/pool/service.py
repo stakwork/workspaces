@@ -2,6 +2,7 @@ import json
 import logging
 import threading
 import time
+import re
 from typing import List, Dict, Optional
 from datetime import datetime
 from kubernetes import client
@@ -10,6 +11,69 @@ from app.workspace.service import workspace_service
 from app.pool.models import PoolConfig, PoolStatus
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_k8s_name(name: str) -> str:
+    """
+    Sanitize a name to be valid for Kubernetes resources.
+    
+    Kubernetes names must:
+    - consist of lower case alphanumeric characters, '-' or '.'
+    - start and end with an alphanumeric character
+    - be no more than 253 characters
+    """
+    # Convert to lowercase
+    sanitized = name.lower()
+    
+    # Replace invalid characters with hyphens
+    sanitized = re.sub(r'[^a-z0-9.-]', '-', sanitized)
+    
+    # Ensure it starts and ends with alphanumeric
+    sanitized = re.sub(r'^[^a-z0-9]+', '', sanitized)
+    sanitized = re.sub(r'[^a-z0-9]+$', '', sanitized)
+    
+    # Replace multiple consecutive hyphens with single hyphen
+    sanitized = re.sub(r'-+', '-', sanitized)
+    
+    # Truncate if too long (leave room for prefixes like "pool-")
+    if len(sanitized) > 240:
+        sanitized = sanitized[:240]
+    
+    # Ensure it's not empty
+    if not sanitized:
+        sanitized = "default"
+    
+    return sanitized
+
+
+def sanitize_k8s_label(value: str) -> str:
+    """
+    Sanitize a value to be valid for Kubernetes labels.
+    
+    Kubernetes labels must:
+    - consist of alphanumeric characters, '-', '_' or '.'
+    - start and end with an alphanumeric character
+    - be no more than 63 characters
+    """
+    # Replace invalid characters with hyphens
+    sanitized = re.sub(r'[^A-Za-z0-9._-]', '-', value)
+    
+    # Ensure it starts and ends with alphanumeric
+    sanitized = re.sub(r'^[^A-Za-z0-9]+', '', sanitized)
+    sanitized = re.sub(r'[^A-Za-z0-9]+$', '', sanitized)
+    
+    # Replace multiple consecutive hyphens with single hyphen
+    sanitized = re.sub(r'-+', '-', sanitized)
+    
+    # Truncate if too long
+    if len(sanitized) > 63:
+        sanitized = sanitized[:63]
+    
+    # Ensure it's not empty
+    if not sanitized:
+        sanitized = "default"
+    
+    return sanitized
 
 
 class PoolService:
@@ -33,6 +97,13 @@ class PoolService:
             
             if minimum_vms < 1:
                 raise ValueError("minimum_vms must be at least 1")
+            
+            # Validate pool name for basic requirements
+            if not pool_name or len(pool_name.strip()) == 0:
+                raise ValueError("Pool name cannot be empty")
+            
+            if len(pool_name) > 253:
+                raise ValueError("Pool name is too long (max 253 characters)")
             
             # Create pool configuration
             pool_config = PoolConfig(
@@ -193,16 +264,6 @@ class PoolService:
                 if workspace.get('state') == 'running' and workspace.get('usage_status') == 'unused':
                     return workspace
             
-            # If no unused running workspace, try to find any running workspace
-            for workspace in workspaces:
-                if workspace.get('state') == 'running':
-                    return workspace
-            
-            # If no running workspace, try to find a pending one
-            for workspace in workspaces:
-                if workspace.get('state') in ['pending', 'creating']:
-                    return workspace
-            
             # No available workspace
             return None
             
@@ -222,7 +283,8 @@ class PoolService:
             # Verify the workspace belongs to this pool
             try:
                 namespace = self.core_v1.read_namespace(namespace_name)
-                if namespace.metadata.labels.get('pool') != pool_name:
+                pool_label = sanitize_k8s_label(pool_name)
+                if namespace.metadata.labels.get('pool') != pool_label:
                     raise ValueError(f"Workspace '{workspace_id}' does not belong to pool '{pool_name}'")
             except client.rest.ApiException as e:
                 if e.status == 404:
@@ -259,7 +321,8 @@ class PoolService:
             # Verify the workspace belongs to this pool
             try:
                 namespace = self.core_v1.read_namespace(namespace_name)
-                if namespace.metadata.labels.get('pool') != pool_name:
+                pool_label = sanitize_k8s_label(pool_name)
+                if namespace.metadata.labels.get('pool') != pool_label:
                     raise ValueError(f"Workspace '{workspace_id}' does not belong to pool '{pool_name}'")
             except client.rest.ApiException as e:
                 if e.status == 404:
@@ -415,11 +478,19 @@ class PoolService:
             'created_at': pool_config.created_at.isoformat()
         }
         
+        # Sanitize the pool name for Kubernetes resource naming
+        sanitized_pool_name = sanitize_k8s_name(pool_config.pool_name)
+        sanitized_pool_label = sanitize_k8s_label(pool_config.pool_name)
+        
         config_map = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(
-                name=f"pool-{pool_config.pool_name}",
+                name=f"pool-{sanitized_pool_name}",
                 namespace="workspace-system",
-                labels={"app": "workspace-pool", "pool": pool_config.pool_name}
+                labels={
+                    "app": "workspace-pool", 
+                    "pool": sanitized_pool_label,
+                    "original-pool-name": sanitized_pool_label  # Keep track of original name
+                }
             ),
             data={
                 "pool.json": json.dumps(config_data)
@@ -429,7 +500,7 @@ class PoolService:
         try:
             # Try to update first
             self.core_v1.patch_namespaced_config_map(
-                name=f"pool-{pool_config.pool_name}",
+                name=f"pool-{sanitized_pool_name}",
                 namespace="workspace-system",
                 body=config_map
             )
@@ -446,8 +517,9 @@ class PoolService:
     def _delete_pool_config(self, pool_name: str):
         """Delete pool configuration from Kubernetes"""
         try:
+            sanitized_pool_name = sanitize_k8s_name(pool_name)
             self.core_v1.delete_namespaced_config_map(
-                name=f"pool-{pool_name}",
+                name=f"pool-{sanitized_pool_name}",
                 namespace="workspace-system"
             )
         except client.rest.ApiException as e:
@@ -457,9 +529,12 @@ class PoolService:
     def _get_pool_workspaces(self, pool_name: str) -> List[Dict]:
         """Get all workspaces belonging to a pool"""
         try:
+            # Use sanitized pool name for label selector
+            sanitized_pool_label = sanitize_k8s_label(pool_name)
+            
             # Get all namespaces with the pool label
             namespaces = self.core_v1.list_namespace(
-                label_selector=f"app=workspace,pool={pool_name}"
+                label_selector=f"app=workspace,pool={sanitized_pool_label}"
             )
             
             workspaces = []
@@ -563,7 +638,7 @@ class PoolService:
                     try:
                         # Create workspace with pool-specific configuration
                         workspace_request = {
-                            'githubUrls': [f"https://github.com/{pool_config.repo_name}"],
+                            'githubUrls': [pool_config.repo_name],
                             'githubBranches': [pool_config.branch_name],
                             'githubToken': pool_config.github_pat,
                             'image': 'linuxserver/code-server:latest',
@@ -602,18 +677,21 @@ class PoolService:
     def _label_namespace_with_pool(self, namespace_name: str, pool_name: str):
         """Add pool label to a workspace namespace"""
         try:
+            # Sanitize the pool name for use as a label
+            sanitized_pool_label = sanitize_k8s_label(pool_name)
+            
             # Patch the namespace to add pool label
             self.core_v1.patch_namespace(
                 name=namespace_name,
                 body={
                     "metadata": {
                         "labels": {
-                            "pool": pool_name
+                            "pool": sanitized_pool_label
                         }
                     }
                 }
             )
-            logger.debug(f"Labeled namespace {namespace_name} with pool {pool_name}")
+            logger.debug(f"Labeled namespace {namespace_name} with pool {sanitized_pool_label}")
         except Exception as e:
             logger.error(f"Error labeling namespace {namespace_name} with pool {pool_name}: {e}")
     

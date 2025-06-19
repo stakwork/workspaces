@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from app.auth.decorators import token_required
 from app.pool.service import pool_service
+from urllib.parse import unquote  # Add this import
 
 logger = logging.getLogger(__name__)
 pool_bp = Blueprint('pool', __name__)
@@ -62,6 +63,7 @@ def create_pool(current_user):
 def get_pool(current_user, pool_name):
     """Get details for a specific pool"""
     try:
+        pool_name = unquote(pool_name)
         pool_info = pool_service.get_pool(pool_name)
         return jsonify(pool_info)
     except ValueError as e:
@@ -77,6 +79,7 @@ def get_pool(current_user, pool_name):
 def delete_pool(current_user, pool_name):
     """Delete a pool"""
     try:
+        pool_name = unquote(pool_name)
         result = pool_service.delete_pool(pool_name)
         return jsonify(result)
     except ValueError as e:
@@ -92,6 +95,7 @@ def delete_pool(current_user, pool_name):
 def scale_pool(current_user, pool_name):
     """Update the minimum VMs for a pool"""
     try:
+        pool_name = unquote(pool_name)
         if not request.json:
             return jsonify({"error": "Request body must be JSON"}), 400
         
@@ -119,6 +123,7 @@ def scale_pool(current_user, pool_name):
 def get_available_workspace(current_user, pool_name):
     """Get an available workspace from the pool"""
     try:
+        pool_name = unquote(pool_name)
         workspace = pool_service.get_available_workspace(pool_name)
         
         if workspace:
@@ -146,6 +151,7 @@ def get_available_workspace(current_user, pool_name):
 def get_pool_status(current_user, pool_name):
     """Get detailed status for a pool"""
     try:
+        pool_name = unquote(pool_name)
         pool_info = pool_service.get_pool(pool_name)
         return jsonify(pool_info['status'])
     except ValueError as e:
@@ -161,6 +167,7 @@ def get_pool_status(current_user, pool_name):
 def list_pool_workspaces(current_user, pool_name):
     """List all workspaces in a pool"""
     try:
+        pool_name = unquote(pool_name)
         pool_info = pool_service.get_pool(pool_name)
         return jsonify({
             "pool_name": pool_name,
@@ -178,6 +185,7 @@ def list_pool_workspaces(current_user, pool_name):
 def mark_workspace_used(current_user, pool_name, workspace_id):
     """Mark a workspace as used"""
     try:
+        pool_name = unquote(pool_name)
         data = request.json or {}
         user_info = data.get('user_info', current_user.get('username'))
         
@@ -197,6 +205,7 @@ def mark_workspace_used(current_user, pool_name, workspace_id):
 def mark_workspace_unused(current_user, pool_name, workspace_id):
     """Mark a workspace as unused"""
     try:
+        pool_name = unquote(pool_name)
         result = pool_service.mark_workspace_as_unused(pool_name, workspace_id)
         return jsonify(result)
         
@@ -213,6 +222,7 @@ def mark_workspace_unused(current_user, pool_name, workspace_id):
 def get_workspace_usage(current_user, pool_name, workspace_id):
     """Get workspace usage status"""
     try:
+        pool_name = unquote(pool_name)
         result = pool_service.get_workspace_usage_status(pool_name, workspace_id)
         return jsonify(result)
         
