@@ -756,8 +756,8 @@ data:
                                         <span class="ml-2 text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-800">Pool</span>
                                     </div>
                                     <div class="mt-2 text-sm text-gray-600">
-                                        <p><strong>Repository:</strong> ${pool.repo_name || 'N/A'}</p>
-                                        <p><strong>Branch:</strong> ${pool.branch_name || 'N/A'}</p>
+                                        <p><strong>Repository:</strong> ${pool.workspaces[0].primaryRepo || 'N/A'}</p>
+                                        <p><strong>Branch:</strong> ${pool.workspaces[0].branches[0] || 'N/A'}</p>
                                         <p><strong>Minimum VMs:</strong> ${pool.minimum_vms}</p>
                                         <p><strong>Current VMs:</strong> ${pool.current_vms}</p>
                                         <p><strong>Running:</strong> ${pool.running_vms} | <strong>Pending:</strong> ${pool.pending_vms} | <strong>Failed:</strong> ${pool.failed_vms}</p>
@@ -771,11 +771,11 @@ data:
                                     </div>
                                 </div>
                                 <div class="space-x-2">
-                                    <button onclick="getAvailableWorkspace('${pool.pool_name}')" 
+                                    <!-- button onclick="getAvailableWorkspace('${pool.pool_name}')" 
                                         class="bg-blue-500 text-white py-1 px-3 rounded-md text-sm"
                                         ${(pool.unused_vms || 0) === 0 ? 'disabled' : ''}>
                                         Get Available (${pool.unused_vms || 0})
-                                    </button>
+                                    </button -->
                                     <button onclick="scalePool('${pool.pool_name}')" class="bg-yellow-500 text-white py-1 px-3 rounded-md text-sm">
                                         Scale
                                     </button>
