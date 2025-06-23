@@ -66,6 +66,7 @@ def extract_workspace_config(data):
 
     # Get optional GitHub token
     github_token = data.get('githubToken', None)
+    github_username = data.get('githubUsername', None)
         
     return {
         'github_urls': github_urls,
@@ -76,5 +77,6 @@ def extract_workspace_config(data):
         'custom_image_url': custom_image_url,
         'use_custom_image_url': use_custom_image_url,
         'use_dev_container': use_dev_container,
-        'github_token': github_token
+        'github_token': github_token,
+        'github_username': github_username
     }

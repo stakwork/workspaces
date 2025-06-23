@@ -11,7 +11,8 @@ class PoolConfig:
     minimum_vms: int
     repo_name: str
     branch_name: str
-    github_pat: str
+    github_pat: Optional[str] = None
+    github_username: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
     
     def to_dict(self):
@@ -21,6 +22,7 @@ class PoolConfig:
             'repo_name': self.repo_name,
             'branch_name': self.branch_name,
             'github_pat': '********',  # Never expose the actual PAT
+            'github_username': self.github_username,
             'created_at': self.created_at.isoformat()
         }
     

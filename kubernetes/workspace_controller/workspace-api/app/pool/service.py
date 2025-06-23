@@ -88,7 +88,7 @@ class PoolService:
         self._load_existing_pools()
     
     def create_pool(self, pool_name: str, minimum_vms: int, repo_name: str, 
-                   branch_name: str, github_pat: str) -> Dict:
+                   branch_name: str, github_pat: str, github_username: str) -> Dict:
         """Create a new pool"""
         try:
             # Validate inputs
@@ -111,7 +111,8 @@ class PoolService:
                 minimum_vms=minimum_vms,
                 repo_name=repo_name,
                 branch_name=branch_name,
-                github_pat=github_pat
+                github_pat=github_pat,
+                github_username=github_username
             )
             
             # Store pool configuration in Kubernetes
@@ -259,17 +260,37 @@ class PoolService:
         try:
             workspaces = self._get_pool_workspaces(pool_name)
             
-            # Find a running and unused workspace first
+            # Find a running, healthy, and unused workspace
             for workspace in workspaces:
-                if workspace.get('state') == 'running' and workspace.get('usage_status') == 'unused':
-                    return workspace
+                state = workspace.get('state')
+                usage_status = workspace.get('usage_status')
+                
+                # Only consider truly healthy workspaces
+                if (state == 'running' and 
+                    usage_status == 'unused' and
+                    state not in ['crashing', 'unstable', 'failed']):
+                    
+                    # Optional: Perform additional health check
+                    workspace_id = workspace.get('id')
+                    if workspace_id:
+                        namespace_name = f"workspace-{workspace_id}"
+                        
+                        # Get the actual pod for health check
+                        pods = self.core_v1.list_namespaced_pod(
+                            namespace_name,
+                            label_selector="app=code-server"
+                        )
+                        
+                        if pods.items and self._is_workspace_healthy(namespace_name, pods.items[0]):
+                            return workspace
             
-            # No available workspace
+            # No healthy available workspace
             return None
             
         except Exception as e:
             logger.error(f"Error getting available workspace from pool '{pool_name}': {e}")
             return None
+
     
     def mark_workspace_as_used(self, pool_name: str, workspace_id: str, user_info: Optional[str] = None) -> Dict:
         """Mark a workspace as used"""
@@ -295,6 +316,8 @@ class PoolService:
             self._update_workspace_usage_status(namespace_name, 'used', user_info)
             
             logger.info(f"Marked workspace '{workspace_id}' as used in pool '{pool_name}'")
+
+            workspace_info = workspace_service.get_workspace(workspace_id)
             
             return {
                 "success": True,
@@ -302,7 +325,8 @@ class PoolService:
                 "workspace_id": workspace_id,
                 "pool_name": pool_name,
                 "usage_status": "used",
-                "user_info": user_info
+                "user_info": user_info,
+                "url": workspace_info['url']
             }
             
         except Exception as e:
@@ -446,12 +470,16 @@ class PoolService:
             for cm in config_maps.items:
                 try:
                     pool_data = json.loads(cm.data.get("pool.json", "{}"))
+                    if 'github_username' not in pool_data:
+                        pool_data['github_username'] = None
+
                     pool_config = PoolConfig(
                         pool_name=pool_data['pool_name'],
                         minimum_vms=pool_data['minimum_vms'],
                         repo_name=pool_data['repo_name'],
                         branch_name=pool_data['branch_name'],
                         github_pat=pool_data['github_pat'],
+                        github_username=pool_data['github_username'],
                         created_at=datetime.fromisoformat(pool_data['created_at'])
                     )
                     
@@ -475,6 +503,7 @@ class PoolService:
             'repo_name': pool_config.repo_name,
             'branch_name': pool_config.branch_name,
             'github_pat': pool_config.github_pat,  # In production, this should be stored in a Secret
+            'github_username': pool_config.github_username,
             'created_at': pool_config.created_at.isoformat()
         }
         
@@ -549,7 +578,7 @@ class PoolService:
                     if config_maps.items:
                         workspace_info = json.loads(config_maps.items[0].data.get("info", "{}"))
                         
-                        # Get pod status
+                        # Get pod status with crash detection
                         pods = self.core_v1.list_namespaced_pod(
                             ns.metadata.name,
                             label_selector="app=code-server"
@@ -557,14 +586,7 @@ class PoolService:
                         
                         if pods.items:
                             pod = pods.items[0]
-                            if pod.status.phase == "Running":
-                                workspace_info["state"] = "running"
-                            elif pod.status.phase in ["Pending"]:
-                                workspace_info["state"] = "pending"
-                            elif pod.status.phase in ["Failed", "Unknown"]:
-                                workspace_info["state"] = "failed"
-                            else:
-                                workspace_info["state"] = pod.status.phase.lower()
+                            workspace_info["state"] = self._determine_pod_state(pod)
                         else:
                             workspace_info["state"] = "creating"  # No pods yet, still being created
                         
@@ -585,6 +607,126 @@ class PoolService:
         except Exception as e:
             logger.error(f"Error getting workspaces for pool '{pool_name}': {e}")
             return []
+
+    def _determine_pod_state(self, pod) -> str:
+        """Determine the actual state of a pod, including crash detection"""
+        
+        # Check if pod is explicitly failed
+        if pod.status.phase in ["Failed", "Unknown"]:
+            return "failed"
+        
+        # Check for crash loop or repeated failures
+        if pod.status.container_statuses:
+            for container_status in pod.status.container_statuses:
+                # Check restart count - high restart count indicates crashing
+                if container_status.restart_count >= 3:  # Configurable threshold
+                    logger.warning(f"Pod {pod.metadata.name} has high restart count: {container_status.restart_count}")
+                    return "crashing"
+                
+                # Check current container state
+                if container_status.state:
+                    # Container is waiting due to crash loop back off
+                    if (container_status.state.waiting and 
+                        container_status.state.waiting.reason in ["CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull"]):
+                        return "crashing"
+                    
+                    # Container terminated due to error
+                    if (container_status.state.terminated and 
+                        container_status.state.terminated.exit_code != 0):
+                        return "failed"
+                
+                # Check last termination state for crash patterns
+                if container_status.last_state and container_status.last_state.terminated:
+                    last_terminated = container_status.last_state.terminated
+                    if last_terminated.exit_code != 0:
+                        # Recent crash - check how recent
+                        if last_terminated.finished_at:
+                            from datetime import datetime, timezone
+                            import dateutil.parser
+                            
+                            finish_time = dateutil.parser.parse(last_terminated.finished_at)
+                            now = datetime.now(timezone.utc)
+                            time_since_crash = (now - finish_time).total_seconds()
+                            
+                            # If crashed within last 5 minutes, consider it unstable
+                            if time_since_crash < 300:  # 5 minutes
+                                logger.warning(f"Pod {pod.metadata.name} crashed recently: {last_terminated.reason}")
+                                return "unstable"
+        
+        # Standard phase checking
+        if pod.status.phase == "Running":
+            # Additional check: ensure containers are actually ready
+            if pod.status.container_statuses:
+                all_ready = all(cs.ready for cs in pod.status.container_statuses)
+                if not all_ready:
+                    return "starting"
+            return "running"
+        elif pod.status.phase == "Pending":
+            return "pending"
+        else:
+            return pod.status.phase.lower()
+        
+    def _is_workspace_healthy(self, namespace_name: str, pod) -> bool:
+        """Perform comprehensive health check on a workspace"""
+        
+        # Basic pod health
+        if pod.status.phase != "Running":
+            return False
+        
+        # Container health
+        if pod.status.container_statuses:
+            for cs in pod.status.container_statuses:
+                # Check if containers are ready
+                if not cs.ready:
+                    return False
+                
+                # Check restart count threshold
+                if cs.restart_count >= 3:
+                    logger.warning(f"Workspace {namespace_name} has high restart count: {cs.restart_count}")
+                    return False
+                
+                # Check for recent crashes
+                if cs.last_state and cs.last_state.terminated:
+                    last_terminated = cs.last_state.terminated
+                    if last_terminated.exit_code != 0:
+                        from datetime import datetime, timezone
+                        import dateutil.parser
+                        
+                        if last_terminated.finished_at:
+                            finish_time = dateutil.parser.parse(last_terminated.finished_at)
+                            now = datetime.now(timezone.utc)
+                            time_since_crash = (now - finish_time).total_seconds()
+                            
+                            # If crashed within last 10 minutes, not healthy
+                            if time_since_crash < 600:
+                                return False
+        
+        # Optional: HTTP health check if your code-server exposes health endpoint
+        # return self._check_http_health(namespace_name)
+        
+        return True
+
+    def _check_http_health(self, namespace_name: str) -> bool:
+        """Optional: Perform HTTP health check on the code-server"""
+        try:
+            # Get service endpoint
+            services = self.core_v1.list_namespaced_service(
+                namespace_name,
+                label_selector="app=code-server"
+            )
+            
+            if not services.items:
+                return False
+            
+            # Perform health check (implement based on your setup)
+            # This would require additional networking setup to reach the pod
+            # from within the cluster
+            
+            return True
+        except Exception as e:
+            logger.error(f"HTTP health check failed for {namespace_name}: {e}")
+            return False
+
     
     def _get_pool_status(self, pool_name: str) -> PoolStatus:
         """Get current status of a pool"""
@@ -641,6 +783,7 @@ class PoolService:
                             'githubUrls': [pool_config.repo_name],
                             'githubBranches': [pool_config.branch_name],
                             'githubToken': pool_config.github_pat,
+                            'githubUsername': pool_config.github_username,
                             'image': 'linuxserver/code-server:latest',
                             'useDevContainer': True
                         }
@@ -734,14 +877,17 @@ class PoolService:
         logger.info(f"Started monitoring pool '{pool_name}'")
         
         # Wait a bit before first check to allow initial creation to complete
-        if not stop_event.wait(10):  # Wait 10 seconds before first check
+        if not stop_event.wait(10):
             while not stop_event.is_set():
                 try:
                     if pool_name in self.pools:
-                        # Use lock to prevent concurrent scaling
                         scaling_lock = self.scaling_locks.get(pool_name)
                         if scaling_lock and scaling_lock.acquire(blocking=False):
                             try:
+                                # Clean up unhealthy workspaces first
+                                # self._cleanup_unhealthy_workspaces(pool_name)
+                                
+                                # Then scale the pool
                                 self._scale_pool(pool_name)
                             finally:
                                 scaling_lock.release()
@@ -754,10 +900,35 @@ class PoolService:
                 except Exception as e:
                     logger.error(f"Error in pool monitoring for '{pool_name}': {e}")
                 
-                # Wait for 60 seconds or until stop event
-                stop_event.wait(60)  # Check every minute instead of every 30 seconds
+                stop_event.wait(60)
         
         logger.info(f"Stopped monitoring pool '{pool_name}'")
+
+    def _cleanup_unhealthy_workspaces(self, pool_name: str):
+        """Remove workspaces that are consistently unhealthy"""
+        try:
+            workspaces = self._get_pool_workspaces(pool_name)
+            
+            for workspace in workspaces:
+                state = workspace.get('state')
+                usage_status = workspace.get('usage_status')
+                workspace_id = workspace.get('id')
+                
+                # Only clean up unused workspaces that are in bad states
+                if (usage_status == 'unused' and 
+                    state in ['crashing', 'failed'] and 
+                    workspace_id):
+                    
+                    logger.warning(f"Cleaning up unhealthy workspace {workspace_id} in pool {pool_name} (state: {state})")
+                    
+                    try:
+                        workspace_service.delete_workspace(workspace_id)
+                        logger.info(f"Deleted unhealthy workspace {workspace_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete unhealthy workspace {workspace_id}: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error cleaning up unhealthy workspaces in pool {pool_name}: {e}")
 
     def get_pool_workspaces(self, pool_name: str) -> Dict:
         """Get all workspaces in a pool"""

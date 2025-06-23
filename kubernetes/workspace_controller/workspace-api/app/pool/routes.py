@@ -45,7 +45,8 @@ def create_pool(current_user):
             minimum_vms=data['minimum_vms'],
             repo_name=data['repo_name'],
             branch_name=data['branch_name'],
-            github_pat=data['github_pat']
+            github_pat=data['github_pat'],
+            github_username=data['github_username']
         )
         
         return jsonify(result), 201

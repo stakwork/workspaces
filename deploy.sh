@@ -119,6 +119,7 @@ kubectl apply -f ./kubernetes/base/apps/workspace-ui.yaml
 echo "Step 10: Applying port detector RBAC..."
 kubectl apply -f ./kubernetes/port_detector/port-detector-rbac.yaml
 
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 
 # Step 11: Install NGINX Ingress Controller with Helm
 echo "Step 11: Installing NGINX Ingress Controller..."

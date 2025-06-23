@@ -49,7 +49,7 @@ def create_persistent_volume_claim(workspace_ids):
     logger.info(f"Created PVC in namespace: {workspace_ids['namespace_name']}")
 
 
-def create_workspace_secret(workspace_ids, github_token=None):
+def create_workspace_secret(workspace_ids, github_token=None, github_username=None):
     """Create secret for workspace credentials and optional GitHub token"""
     string_data = {
         "password": workspace_ids['password']
@@ -57,6 +57,7 @@ def create_workspace_secret(workspace_ids, github_token=None):
 
     if github_token:
         string_data["github_token"] = github_token
+        string_data["github_username"] = github_username
 
     secret = client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -390,6 +391,18 @@ def _create_workspace_init_container():
             )
         )
     )
+    env_vars.append(
+        client.V1EnvVar(
+            name="GITHUB_USERNAME",
+            value_from=client.V1EnvVarSource(
+                secret_key_ref=client.V1SecretKeySelector(
+                    name="workspace-secret",
+                    key="github_username",
+                    optional=True
+                )
+            )
+        )
+    )
     return client.V1Container(
         name="init-workspace",
         image="buildpack-deps:22.04-scm",
@@ -518,7 +531,26 @@ def _create_code_server_container(workspace_ids, workspace_config):
             client.V1EnvVar(name="VSCODE_USER_DATA_DIR", value="/config/data"),
             client.V1EnvVar(name="CS_DISABLE_GETTING_STARTED_OVERRIDE", value="true"),
             client.V1EnvVar(name="VSCODE_PROXY_URI", value=f"https://{workspace_ids['subdomain']}-{{{{port}}}}.{app_config.WORKSPACE_DOMAIN}/"),
-            # Authentication and core settings
+            client.V1EnvVar(
+                name="GITHUB_TOKEN",
+                value_from=client.V1EnvVarSource(
+                    secret_key_ref=client.V1SecretKeySelector(
+                        name="workspace-secret",
+                        key="github_token",
+                        optional=True
+                    )
+                )
+            ),
+            client.V1EnvVar(
+                name="GITHUB_USERNAME",
+                value_from=client.V1EnvVarSource(
+                    secret_key_ref=client.V1SecretKeySelector(
+                        name="workspace-secret",
+                        key="github_username",
+                        optional=True
+                    )
+                )
+            ),
             client.V1EnvVar(
                 name="PASSWORD",
                 value_from=client.V1EnvVarSource(

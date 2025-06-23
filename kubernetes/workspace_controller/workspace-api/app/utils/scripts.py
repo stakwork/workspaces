@@ -252,6 +252,9 @@ def generate_init_script(workspace_ids, workspace_config):
       # Configure git to use GITHUB_TOKEN for private repos
       if [ ! -z "$GITHUB_TOKEN" ]; then
         echo "Using GITHUB_TOKEN for private repo access"
+        
+        git config --global user.name "$GITHUB_USERNAME"
+        git config --global user.email "$GITHUB_USERNAME@users.noreply.github.com"
         git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
       fi
     """
@@ -297,6 +300,8 @@ def generate_init_script(workspace_ids, workspace_config):
         # Set Git remote URL to use GITHUB_TOKEN
         if [ ! -z "$GITHUB_TOKEN" ]; then
             cd /workspaces/{folder_name}
+            git config --global user.name "$GITHUB_USERNAME"
+            git config --global user.email "$GITHUB_USERNAME@users.noreply.github.com"
             git remote set-url origin https://$GITHUB_TOKEN@github.com/{owner}/{folder_name}.git
             cd ..
         fi
@@ -362,8 +367,12 @@ git config --global --add safe.directory /workspaces/{repo_name}
 # Set up git config if needed
 git config --global --add safe.directory /workspaces
 
-git config --global user.email "user@example.com"
-git config --global user.name "Code Server User"
+if [ ! -z "$GITHUB_USERNAME" ]; then
+    echo "Using GITHUB_USERNAME"
+
+    git config --global user.name "$GITHUB_USERNAME"
+    git config --global user.email "$GITHUB_USERNAME@users.noreply.github.com"
+fi
 
 # Create Docker helper scripts for the user
 cat > /workspaces/docker-info.sh << 'EOF'
@@ -669,6 +678,16 @@ def generate_helper_scripts():
     return {
         "docker_compose_script": """#!/bin/bash
 set -e
+
+if [ ! -z "$GITHUB_TOKEN" ]; then
+  echo "Using GITHUB_TOKEN for private repo access"
+
+  git config --global user.name "$GITHUB_USERNAME"
+  git config --global user.email "$GITHUB_USERNAME@users.noreply.github.com"
+  git config --global url."https://$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
+else
+  echo "No GITHUB_TOKEN found"
+fi
 
 COMPOSE_FILE_PATH="/workspaces/.docker-compose-file"
 SERVICE_FILE_PATH="/workspaces/.docker-compose-service"
