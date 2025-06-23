@@ -348,7 +348,7 @@ def create_deployment(workspace_ids, workspace_config):
                     }
                 ),
                 spec=client.V1PodSpec(
-                    host_network=True,
+                    # host_network=True,
                     service_account_name="workspace-controller",
                     init_containers=init_containers,
                     containers=[code_server_container, port_detector_container],
