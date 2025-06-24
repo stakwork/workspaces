@@ -57,11 +57,11 @@ data:
             <!-- Navigation Tabs -->
             <div class="mb-6">
                 <nav class="flex space-x-8" aria-label="Tabs">
-                    <button id="workspacesTab" class="tab-button bg-blue-500 text-white py-2 px-4 rounded-md">
-                        Individual Pods
-                    </button>
-                    <button id="poolsTab" class="tab-button bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300">
+                    <button id="poolsTab" class="tab-button bg-green-500 text-white py-2 px-4 rounded-md">
                         Pod Pools
+                    </button>
+                    <button id="workspacesTab" class="tab-button bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300">
+                        Individual Pods
                     </button>
                 </nav>
             </div>
@@ -267,7 +267,7 @@ data:
         let repoCounter = 1;
         let authToken = null;
         let currentUser = null;
-        let currentTab = 'workspaces';
+        let currentTab = 'pools';
 
         function encodePoolName(poolName) {
             return encodeURIComponent(poolName);
@@ -333,7 +333,7 @@ data:
                 showMainContent();
                 setupTabListeners();
                 setupFormListeners();
-                loadWorkspaces();
+                switchTab('pools'); // Default to Pod Pools
             } else {
                 showLoginModal();
             }
@@ -350,28 +350,26 @@ data:
         }
 
         function setupTabListeners() {
-            document.getElementById('workspacesTab').addEventListener('click', () => switchTab('workspaces'));
             document.getElementById('poolsTab').addEventListener('click', () => switchTab('pools'));
+            document.getElementById('workspacesTab').addEventListener('click', () => switchTab('workspaces'));
         }
 
         function switchTab(tab) {
             currentTab = tab;
-            
             // Update tab buttons
             document.querySelectorAll('.tab-button').forEach(btn => {
                 btn.className = 'tab-button bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300';
             });
-            
-            if (tab === 'workspaces') {
+            if (tab === 'pools') {
+                document.getElementById('poolsTab').className = 'tab-button bg-green-500 text-white py-2 px-4 rounded-md';
+                document.getElementById('poolsContent').classList.remove('hidden');
+                document.getElementById('workspacesContent').classList.add('hidden');
+                loadPools();
+            } else {
                 document.getElementById('workspacesTab').className = 'tab-button bg-blue-500 text-white py-2 px-4 rounded-md';
                 document.getElementById('workspacesContent').classList.remove('hidden');
                 document.getElementById('poolsContent').classList.add('hidden');
                 loadWorkspaces();
-            } else {
-                document.getElementById('poolsTab').className = 'tab-button bg-green-500 text-white py-2 px-4 rounded-md';
-                document.getElementById('workspacesContent').classList.add('hidden');
-                document.getElementById('poolsContent').classList.remove('hidden');
-                loadPools();
             }
         }
 
@@ -415,7 +413,7 @@ data:
                     showMainContent();
                     setupTabListeners();
                     setupFormListeners();
-                    loadWorkspaces();
+                    switchTab('pools'); // Ensure Pod Pools tab and content is shown after login
                     
                     // Clear form
                     document.getElementById('loginForm').reset();
