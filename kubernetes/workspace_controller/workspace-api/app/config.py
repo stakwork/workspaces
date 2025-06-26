@@ -17,6 +17,7 @@ class Config:
         self.core_v1 = None
         self.apps_v1 = None
         self.networking_v1 = None
+        self.batch_v1 = None
         
         self._init_kubernetes()
         self._load_config()
@@ -37,6 +38,7 @@ class Config:
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
         self.networking_v1 = client.NetworkingV1Api()
+        self.batch_v1 = client.BatchV1Api()
     
     def _load_config(self):
         """Load configuration from ConfigMap"""

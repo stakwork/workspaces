@@ -541,7 +541,7 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 EXPOSE 8444
 
 # Set up entrypoint to run code-server
-ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
+ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --disable-workspace-trust --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
 EOF
     
     # Create a flag file to indicate setup is done
@@ -932,3 +932,315 @@ if [ -f "/workspaces/.forward-ports" ]; then
 fi
 """
     }
+
+def get_warmer_javascript(url):
+    """Return the warmer JavaScript code that connects to the actual URL"""
+    return f"""
+const {{ chromium }} = require('playwright-core');
+
+const PASSWORD = process.env.CODE_SERVER_PASSWORD;
+const CODE_SERVER_URL = "{url}";
+
+console.log('Starting Code-Server Warmer...');
+console.log('🌐 Target URL:', CODE_SERVER_URL);
+
+class CodeServerWarmer {{
+    constructor() {{
+        this.browser = null;
+        this.page = null;
+        this.loginAttempts = 0;
+        this.maxLoginAttempts = 10;
+        this.isLoggedIn = false;
+    }}
+
+    async start() {{
+        try {{
+            console.log('🚀 Launching browser for warming...');
+            
+            this.browser = await chromium.launch({{
+                headless: true,
+                executablePath: '/usr/bin/chromium-browser',
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding',
+                    '--disable-extensions',
+                    '--disable-plugins',
+                    '--disable-images',
+                    '--disable-javascript-harmony-shipping',
+                    '--disable-background-networking',
+                    '--disable-default-apps',
+                    '--disable-sync',
+                    '--disable-translate',
+                    '--hide-scrollbars',
+                    '--mute-audio',
+                    '--no-first-run',
+                    '--safebrowsing-disable-auto-update',
+                    '--disable-ipc-flooding-protection',
+                    '--memory-pressure-off',
+                    '--ignore-certificate-errors',
+                    '--ignore-ssl-errors'
+                ]
+            }});
+
+            const context = await this.browser.newContext({{
+                viewport: {{ width: 1280, height: 720 }},
+                deviceScaleFactor: 1,
+                hasTouch: false,
+                javaScriptEnabled: true,
+                ignoreHTTPSErrors: true
+            }});
+
+            this.page = await context.newPage();
+
+            console.log('🌐 Navigating to VS Code via HTTPS...');
+            await this.page.goto(CODE_SERVER_URL, {{ 
+                waitUntil: 'domcontentloaded',
+                timeout: 30000 
+            }});
+
+            console.log('🔐 Starting login process...');
+            await this.performLoginWithRetry();
+
+            if (!this.isLoggedIn) {{
+                throw new Error('Failed to login after maximum attempts');
+            }}
+
+            console.log('⏳ Waiting for VS Code to load...');
+            await this.page.waitForTimeout(5000);
+
+            console.log('✅ Starting 10-second interaction period...');
+            await this.performBriefInteraction();
+
+            console.log('🎉 Warming complete - exiting successfully!');
+            await this.cleanup();
+            process.exit(0);
+
+        }} catch (error) {{
+            console.error('💥 Error:', error);
+            await this.cleanup();
+            process.exit(1);
+        }}
+    }}
+
+    async performLoginWithRetry() {{
+        this.loginAttempts = 0;
+        
+        while (this.loginAttempts < this.maxLoginAttempts && !this.isLoggedIn) {{
+            this.loginAttempts++;
+            console.log(`🔐 Login attempt ${{this.loginAttempts}}/${{this.maxLoginAttempts}}...`);
+            
+            try {{
+                await this.attemptLogin();
+                
+                if (await this.verifyLoginSuccess()) {{
+                    this.isLoggedIn = true;
+                    console.log('✅ Login successful!');
+                    return;
+                }} else {{
+                    console.log('❌ Login verification failed, retrying...');
+                }}
+                
+            }} catch (error) {{
+                console.log(`❌ Login attempt ${{this.loginAttempts}} failed:`, error.message);
+            }}
+            
+            if (!this.isLoggedIn && this.loginAttempts < this.maxLoginAttempts) {{
+                console.log(`⏳ Waiting 3 seconds before retry...`);
+                await this.page.waitForTimeout(3000);
+                
+                try {{
+                    await this.page.goto(CODE_SERVER_URL + '/login', {{
+                        waitUntil: 'domcontentloaded',
+                        timeout: 15000
+                    }});
+                }} catch (e) {{
+                    console.log('⚠️ Failed to navigate to login page, trying main page...');
+                    await this.page.goto(CODE_SERVER_URL, {{
+                        waitUntil: 'domcontentloaded',
+                        timeout: 15000
+                    }});
+                }}
+            }}
+        }}
+        
+        if (!this.isLoggedIn) {{
+            throw new Error(`Failed to login after ${{this.maxLoginAttempts}} attempts`);
+        }}
+    }}
+
+    async attemptLogin() {{
+        try {{
+            const passwordSelectors = [
+                'input[type="password"]',
+                'input[name="password"]', 
+                '#password',
+                '.password-input'
+            ];
+            
+            let passwordInput = null;
+            for (const selector of passwordSelectors) {{
+                try {{
+                    passwordInput = await this.page.waitForSelector(selector, {{ timeout: 10000 }});
+                    if (passwordInput) {{
+                        console.log(`✅ Found password input with selector: ${{selector}}`);
+                        break;
+                    }}
+                }} catch (e) {{
+                    console.log(`⚠️ Password selector ${{selector}} not found, trying next...`);
+                }}
+            }}
+            
+            if (!passwordInput) {{
+                // Log the page content for debugging
+                const pageContent = await this.page.content();
+                console.log('📄 Page content preview:', pageContent.substring(0, 500));
+                throw new Error('Password input not found with any selector');
+            }}
+            
+            await passwordInput.click({{ clickCount: 3 }});
+            await passwordInput.type(PASSWORD, {{ delay: 100 }});
+            
+            console.log('⌨️ Password entered, submitting...');
+            
+            // Try Enter key
+            await this.page.keyboard.press('Enter');
+            
+            // Wait for response
+            await Promise.race([
+                this.page.waitForNavigation({{ 
+                    waitUntil: 'domcontentloaded', 
+                    timeout: 15000 
+                }}),
+                this.page.waitForTimeout(5000)
+            ]);
+            
+        }} catch (error) {{
+            throw new Error(`Login attempt failed: ${{error.message}}`);
+        }}
+    }}
+
+    async verifyLoginSuccess() {{
+        try {{
+            console.log('🔍 Verifying login success...');
+            
+            await this.page.waitForTimeout(3000);
+            
+            const currentUrl = this.page.url();
+            console.log(`📍 Current URL: ${{currentUrl}}`);
+            
+            // Check if we're no longer on login page
+            if (!currentUrl.includes('/login')) {{
+                console.log('✅ Login success confirmed - not on login page');
+                return true;
+            }}
+            
+            // Also check for VS Code elements
+            try {{
+                const vsCodeElements = [
+                    '.monaco-workbench',
+                    '.monaco-editor', 
+                    '.workbench',
+                    '[class*="vs-dark"]',
+                    '[class*="vs-light"]'
+                ];
+                
+                for (const selector of vsCodeElements) {{
+                    const element = await this.page.$(selector);
+                    if (element) {{
+                        console.log(`✅ Found VS Code element: ${{selector}}`);
+                        return true;
+                    }}
+                }}
+            }} catch (e) {{
+                console.log('⚠️ VS Code element check failed:', e.message);
+            }}
+            
+            console.log('❌ Login verification failed');
+            return false;
+            
+        }} catch (error) {{
+            console.log('❌ Login verification error:', error.message);
+            return false;
+        }}
+    }}
+
+    async performBriefInteraction() {{
+        console.log('🎯 Starting 10-second interaction period...');
+        
+        const interactions = [
+            async () => {{
+                console.log('👤 Clicking on VS Code interface...');
+                await this.page.click('body');
+                await this.page.waitForTimeout(10000);
+            }},
+            async () => {{
+                console.log('⌨️ Pressing Escape key...');
+                await this.page.keyboard.press('Escape');
+                await this.page.waitForTimeout(10000);
+            }},
+            async () => {{
+                console.log('🖱️ Moving mouse around...');
+                await this.page.mouse.move(200, 200);
+                await this.page.waitForTimeout(10000);
+                await this.page.mouse.move(400, 300);
+                await this.page.waitForTimeout(10000);
+            }},
+            async () => {{
+                console.log('📁 Trying to open command palette...');
+                await this.page.keyboard.press('F1');
+                await this.page.waitForTimeout(10000);
+                await this.page.keyboard.press('Escape');
+                await this.page.waitForTimeout(10000);
+            }},
+            async () => {{
+                console.log('🔄 Final interaction - clicking and scrolling...');
+                await this.page.click('body');
+                await this.page.mouse.wheel(0, 100);
+                await this.page.waitForTimeout(10000);
+            }}
+        ];
+
+        for (let i = 0; i < interactions.length; i++) {{
+            try {{
+                console.log(`🎯 Interaction ${{i + 1}}/${{interactions.length}}...`);
+                await interactions[i]();
+            }} catch (error) {{
+                console.log(`⚠️ Interaction ${{i + 1}} failed:`, error.message);
+            }}
+        }}
+        
+        console.log('✅ 10-second interaction period completed!');
+    }}
+
+    async cleanup() {{
+        console.log('🧹 Cleaning up browser...');
+        
+        try {{
+            if (this.page) await this.page.close();
+            if (this.browser) await this.browser.close();
+        }} catch (error) {{
+            console.error('Cleanup error:', error);
+        }}
+    }}
+}}
+
+const warmer = new CodeServerWarmer();
+warmer.start();
+
+process.on('SIGTERM', async () => {{
+    console.log('📡 Received SIGTERM, cleaning up...');
+    await warmer.cleanup();
+    process.exit(0);
+}});
+
+process.on('SIGINT', async () => {{
+    console.log('📡 Received SIGINT, cleaning up...');
+    await warmer.cleanup();
+    process.exit(0);
+}});
+"""

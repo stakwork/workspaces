@@ -15,6 +15,7 @@ class WorkspaceService:
         self.core_v1 = app_config.core_v1
         self.apps_v1 = app_config.apps_v1
         self.networking_v1 = app_config.networking_v1
+        self.batch_v1 = app_config.batch_v1
     
     def list_workspaces(self):
         """List all workspaces"""
@@ -232,6 +233,8 @@ class WorkspaceService:
         k8s_resources.create_deployment(workspace_ids, workspace_config)
         k8s_resources.create_service(workspace_ids)
         k8s_resources.create_ingress(workspace_ids)
+
+        k8s_resources.create_warmer_job(workspace_ids)
     
     def _get_workspace_info(self, workspace_ids, workspace_config):
         """Create the workspace information dictionary"""

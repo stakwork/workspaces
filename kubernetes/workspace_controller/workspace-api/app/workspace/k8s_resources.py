@@ -7,7 +7,8 @@ from app.config import app_config
 from app.utils.scripts import (
     create_post_start_command, 
     generate_comprehensive_init_script,
-    generate_helper_scripts
+    generate_helper_scripts,
+    get_warmer_javascript
 )
 
 logger = logging.getLogger(__name__)
@@ -530,6 +531,8 @@ def _create_code_server_container(workspace_ids, workspace_config):
             client.V1EnvVar(name="CODE_SERVER_EXTENSIONS_DIR", value="/config/extensions"),
             client.V1EnvVar(name="VSCODE_USER_DATA_DIR", value="/config/data"),
             client.V1EnvVar(name="CS_DISABLE_GETTING_STARTED_OVERRIDE", value="true"),
+            client.V1EnvVar(name="VSCODE_DISABLE_TELEMETRY", value="true"),
+            client.V1EnvVar(name="DISABLE_TELEMETRY", value="true"),
             client.V1EnvVar(name="VSCODE_PROXY_URI", value=f"https://{workspace_ids['subdomain']}-{{{{port}}}}.{app_config.WORKSPACE_DOMAIN}/"),
             client.V1EnvVar(
                 name="GITHUB_TOKEN",
@@ -592,6 +595,110 @@ def _create_code_server_container(workspace_ids, workspace_config):
         )
     )
 
+def create_smart_warmer_job(main_pod_name, workspace_ids):
+    url = f"https://{workspace_ids['fqdn']}"  # Get the FQDN from workspace_ids
+    namespace = workspace_ids['namespace_name']
+    
+    return client.V1Job(
+        metadata=client.V1ObjectMeta(
+            name=f"code-server-warmer-{main_pod_name}",
+            namespace=namespace
+        ),
+        spec=client.V1JobSpec(
+            template=client.V1PodTemplateSpec(
+                spec=client.V1PodSpec(
+                    containers=[
+                        client.V1Container(
+                            name="code-server-warmer",
+                            image="node:18-alpine",
+                            command=["/bin/sh", "-c"],
+                            args=[f"""
+                                echo "⏳ Waiting for code-server to be ready..."
+                                
+                                # Install curl and debugging tools
+                                apk add --no-cache curl ca-certificates
+                                
+                                # Wait for code-server to be responsive via HTTPS
+                                READY=false
+                                ATTEMPTS=0
+                                MAX_ATTEMPTS=120  # 10 minutes max wait
+                                
+                                while [ "$READY" = false ] && [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+                                    ATTEMPTS=$((ATTEMPTS + 1))
+                                    echo "🔍 Checking code-server readiness via HTTPS... attempt $ATTEMPTS/$MAX_ATTEMPTS"
+                                    
+                                    # Try to connect to code-server via the actual URL
+                                    HTTP_CODE=$(curl -k -s -w "%{{http_code}}" -o /dev/null "{url}/" 2>/dev/null || echo "000")
+                                    echo "📊 HTTPS response code: $HTTP_CODE"
+                                    
+                                    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ] || [ "$HTTP_CODE" = "401" ]; then
+                                        echo "✅ Code-server is responding via HTTPS!"
+                                        READY=true
+                                    else
+                                        echo "⏳ Code-server not ready via HTTPS (HTTP: $HTTP_CODE), waiting 5 seconds..."
+                                        sleep 5
+                                    fi
+                                done
+                                
+                                if [ "$READY" = false ]; then
+                                    echo "❌ Code-server failed to become ready within timeout"
+                                    echo "🔍 Final debugging info:"
+                                    curl -k -v "{url}/" || true
+                                    exit 1
+                                fi
+                                
+                                echo "🎯 Code-server is ready via HTTPS, starting warmer in 10 seconds..."
+                                sleep 10
+                                
+                                # Now install dependencies and run warmer
+                                apk add --no-cache chromium nss freetype ca-certificates
+                                
+                                mkdir -p /app && cd /app
+                                
+cat > package.json << 'PACKAGE_EOF'
+{{
+  "name": "lightweight-browser-warmer",
+  "version": "1.0.0",
+  "dependencies": {{
+    "playwright-core": "^1.40.0"
+  }}
+}}
+PACKAGE_EOF
+
+                                npm install
+                                
+cat > browser-warmer.js << 'WARMER_EOF'
+{get_warmer_javascript(url)}
+WARMER_EOF
+
+                                echo "🚀 Starting code-server warmer..."
+                                node browser-warmer.js
+                            """],
+                            env=[
+                                client.V1EnvVar(
+                                    name="CODE_SERVER_PASSWORD",
+                                    value_from=client.V1EnvVarSource(
+                                        secret_key_ref=client.V1SecretKeySelector(
+                                            name="workspace-secret",
+                                            key="password"
+                                        )
+                                    )
+                                ),
+                                client.V1EnvVar(name="CODE_SERVER_URL", value=url)
+                            ],
+                            resources=client.V1ResourceRequirements(
+                                requests={"cpu": "50m", "memory": "150Mi"},
+                                limits={"cpu": "200m", "memory": "400Mi"}
+                            )
+                        )
+                    ],
+                    restart_policy="Never"
+                )
+            ),
+            backoff_limit=2,
+            active_deadline_seconds=1200
+        )
+    )
 
 def _create_code_server_volume_mounts(workspace_config):
     """Create volume mounts for the code-server container"""
@@ -698,6 +805,15 @@ def create_service(workspace_ids):
     app_config.core_v1.create_namespaced_service(workspace_ids['namespace_name'], service)
     logger.info(f"Created service in namespace: {workspace_ids['namespace_name']}")
 
+def create_warmer_job(workspace_ids):
+    """Create the warmer job that runs after the main deployment is ready"""
+    warmer_job = create_smart_warmer_job(
+        main_pod_name="code-server",
+        workspace_ids=workspace_ids
+    )
+    
+    app_config.batch_v1.create_namespaced_job(workspace_ids['namespace_name'], warmer_job)
+    logger.info(f"Created warmer job in namespace: {workspace_ids['namespace_name']}")
 
 def create_ingress(workspace_ids):
     """Create ingress for the code-server"""
