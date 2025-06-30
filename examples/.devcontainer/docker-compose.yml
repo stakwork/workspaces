@@ -1,0 +1,35 @@
+version: '3.8'
+volumes:
+  postgres-data:
+    driver: local
+networks:
+  app_network:
+    driver: bridge
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ../..:/workspaces:cached
+    command: sleep infinity
+    networks:
+      - app_network
+    extra_hosts:
+      - "localhost:172.17.0.1"
+      - "host.docker.internal:host-gateway"
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgres
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    networks:
+      - app_network
+    extra_hosts:
+      - "localhost:172.17.0.1"
+      - "host.docker.internal:host-gateway"
