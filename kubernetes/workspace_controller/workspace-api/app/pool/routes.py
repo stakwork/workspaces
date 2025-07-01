@@ -40,13 +40,24 @@ def create_pool(current_user):
         if not isinstance(data['minimum_vms'], int) or data['minimum_vms'] < 1:
             return jsonify({"error": "minimum_vms must be a positive integer"}), 400
         
+        # Validate environment variables format
+        env_vars = data.get('env_vars', [])
+        if env_vars and not isinstance(env_vars, list):
+            return jsonify({"error": "env_vars must be a list"}), 400
+        
+        for env_var in env_vars:
+            if not isinstance(env_var, dict) or 'name' not in env_var or 'value' not in env_var:
+                return jsonify({"error": "Each env_var must have 'name' and 'value' fields"}), 400
+
+        
         result = pool_service.create_pool(
             pool_name=data['pool_name'],
             minimum_vms=data['minimum_vms'],
             repo_name=data['repo_name'],
             branch_name=data['branch_name'],
             github_pat=data['github_pat'],
-            github_username=data['github_username']
+            github_username=data['github_username'],
+            env_vars=env_vars
         )
         
         return jsonify(result), 201
@@ -56,6 +67,46 @@ def create_pool(current_user):
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error(f"Error in create_pool: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@pool_bp.route('/<pool_name>', methods=['PUT'])
+@token_required
+def update_pool(current_user, pool_name):
+    """Update pool configuration"""
+    try:
+        pool_name = unquote(pool_name)
+        if not request.json:
+            return jsonify({"error": "Request body must be JSON"}), 400
+        
+        data = request.json
+        
+        # Validate environment variables format if provided
+        if 'env_vars' in data:
+            env_vars = data['env_vars']
+            if env_vars and not isinstance(env_vars, list):
+                return jsonify({"error": "env_vars must be a list"}), 400
+            
+            for env_var in env_vars:
+                if not isinstance(env_var, dict) or 'name' not in env_var or 'value' not in env_var:
+                    return jsonify({"error": "Each env_var must have 'name' and 'value' fields"}), 400
+        
+        if 'github_pat' in data:
+            github_pat = data['github_pat']
+            if isinstance(github_pat, dict):
+                if 'value' not in github_pat:
+                    return jsonify({"error": "github_pat object must have 'value' field"}), 400
+            elif not isinstance(github_pat, str):
+                return jsonify({"error": "github_pat must be a string or object with 'value' field"}), 400
+
+
+        result = pool_service.update_pool(pool_name, data)
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.warning(f"Validation error in update_pool: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in update_pool: {e}")
         return jsonify({"error": str(e)}), 500
 
 

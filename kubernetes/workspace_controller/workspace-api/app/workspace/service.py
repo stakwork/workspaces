@@ -219,7 +219,7 @@ class WorkspaceService:
         
         # Create storage and credentials
         k8s_resources.create_persistent_volume_claim(workspace_ids)
-        k8s_resources.create_workspace_secret(workspace_ids, workspace_config.get('github_token'), workspace_config.get('github_username'))
+        k8s_resources.create_workspace_secret(workspace_ids, workspace_config)
         
         # Create initialization scripts
         k8s_resources.create_init_script_configmap(workspace_ids, workspace_config)
