@@ -50,15 +50,28 @@ def create_persistent_volume_claim(workspace_ids):
     logger.info(f"Created PVC in namespace: {workspace_ids['namespace_name']}")
 
 
-def create_workspace_secret(workspace_ids, github_token=None, github_username=None):
+def create_workspace_secret(workspace_ids, workspace_config):
     """Create secret for workspace credentials and optional GitHub token"""
     string_data = {
         "password": workspace_ids['password']
     }
 
+    github_token = workspace_config.get('github_token')
+    github_username = workspace_config.get('github_username')
+    env_vars = workspace_config.get('env_vars')
+
     if github_token:
         string_data["github_token"] = github_token
         string_data["github_username"] = github_username
+
+    if env_vars:
+        for env_var in env_vars:
+            env_name = env_var.get('name', '').strip()
+            env_value = env_var.get('value', '').strip()
+            
+            if env_name and env_value:
+                # Prefix env vars to avoid conflicts with system secrets
+                string_data[f"env_{env_name}"] = env_value
 
     secret = client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -369,18 +382,17 @@ def create_deployment(workspace_ids, workspace_config):
 def _create_init_containers(workspace_ids, workspace_config):
     """Create the initialization containers for the deployment"""
     init_containers = [
-        _create_workspace_init_container(),
+        _create_workspace_init_container(workspace_config),
         _create_base_image_kaniko_container(workspace_ids),
         _create_wrapper_kaniko_container(workspace_ids)
     ]
     return init_containers
 
 
-def _create_workspace_init_container():
+def _create_workspace_init_container(workspace_config):
     """Create the main workspace initialization container"""
-    env_vars = []
-    # Add GITHUB_TOKEN env var if present in secret
-    env_vars.append(
+    base_env_vars = [
+        # Add GITHUB_TOKEN env var if present in secret
         client.V1EnvVar(
             name="GITHUB_TOKEN",
             value_from=client.V1EnvVarSource(
@@ -390,9 +402,7 @@ def _create_workspace_init_container():
                     optional=True
                 )
             )
-        )
-    )
-    env_vars.append(
+        ),
         client.V1EnvVar(
             name="GITHUB_USERNAME",
             value_from=client.V1EnvVarSource(
@@ -403,7 +413,28 @@ def _create_workspace_init_container():
                 )
             )
         )
-    )
+    ]
+    
+    env_vars = workspace_config.get('env_vars', [])
+    
+    # Add custom environment variables
+    if env_vars:
+        for env_var in env_vars:
+            env_name = env_var.get('name', '').strip()
+            if env_name:
+                base_env_vars.append(
+                    client.V1EnvVar(
+                        name=env_name,
+                        value_from=client.V1EnvVarSource(
+                            secret_key_ref=client.V1SecretKeySelector(
+                                name="workspace-secret",
+                                key=f"env_{env_name}",
+                                optional=True
+                            )
+                        )
+                    )
+                )
+    
     return client.V1Container(
         name="init-workspace",
         image="buildpack-deps:22.04-scm",
@@ -433,7 +464,7 @@ def _create_workspace_init_container():
                 mount_path="/var/run/docker.sock"
             )
         ],
-        env=env_vars
+        env=base_env_vars
     )
 
 
@@ -517,57 +548,80 @@ def _create_code_server_container(workspace_ids, workspace_config):
     """Create the main code-server container"""
     image_pull_policy = "Always"
 
+    # Base environment variables
+    base_env_vars = [
+        # LinuxServer.io specific environment variables
+        client.V1EnvVar(name="PUID", value="1000"),  # User ID
+        client.V1EnvVar(name="PGID", value="1000"),  # Group ID
+        client.V1EnvVar(name="TZ", value="UTC"),  # Timezone
+        client.V1EnvVar(name="DEFAULT_WORKSPACE", value="/workspaces"),  
+        client.V1EnvVar(name="VSCODE_EXTENSIONS", value="/config/extensions"),
+        client.V1EnvVar(name="CODE_SERVER_EXTENSIONS_DIR", value="/config/extensions"),
+        client.V1EnvVar(name="VSCODE_USER_DATA_DIR", value="/config/data"),
+        client.V1EnvVar(name="CS_DISABLE_GETTING_STARTED_OVERRIDE", value="true"),
+        client.V1EnvVar(name="VSCODE_DISABLE_TELEMETRY", value="true"),
+        client.V1EnvVar(name="DISABLE_TELEMETRY", value="true"),
+        client.V1EnvVar(name="VSCODE_PROXY_URI", value=f"https://{workspace_ids['subdomain']}-{{{{port}}}}.{app_config.WORKSPACE_DOMAIN}/"),
+        client.V1EnvVar(
+            name="GITHUB_TOKEN",
+            value_from=client.V1EnvVarSource(
+                secret_key_ref=client.V1SecretKeySelector(
+                    name="workspace-secret",
+                    key="github_token",
+                    optional=True
+                )
+            )
+        ),
+        client.V1EnvVar(
+            name="GITHUB_USERNAME",
+            value_from=client.V1EnvVarSource(
+                secret_key_ref=client.V1SecretKeySelector(
+                    name="workspace-secret",
+                    key="github_username",
+                    optional=True
+                )
+            )
+        ),
+        client.V1EnvVar(
+            name="PASSWORD",
+            value_from=client.V1EnvVarSource(
+                secret_key_ref=client.V1SecretKeySelector(
+                    name="workspace-secret",
+                    key="password"
+                )
+            )
+        ),
+        # Docker support
+        client.V1EnvVar(name="DOCKER_HOST", value="unix:///var/run/docker.sock"),
+        # Add this for dev container mode
+        client.V1EnvVar(name="CODE_SERVER_PATH", value="/opt/code-server/bin/code-server" if workspace_config['use_dev_container'] else ""),
+    ]
+
+    env_vars = workspace_config.get('env_vars', [])
+    # Add custom environment variables from pool configuration
+    if env_vars:
+        for env_var in env_vars:
+            env_name = env_var.get('name', '').strip()
+            if env_name:
+                # Add environment variable that references the secret
+                base_env_vars.append(
+                    client.V1EnvVar(
+                        name=env_name,
+                        value_from=client.V1EnvVarSource(
+                            secret_key_ref=client.V1SecretKeySelector(
+                                name="workspace-secret",
+                                key=f"env_{env_name}",
+                                optional=True  # Make it optional in case the env var is not set
+                            )
+                        )
+                    )
+                )
+
     return client.V1Container(
         name="code-server",
         image=f"{app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
         image_pull_policy=image_pull_policy,
-        env=[
-            # LinuxServer.io specific environment variables
-            client.V1EnvVar(name="PUID", value="1000"),  # User ID
-            client.V1EnvVar(name="PGID", value="1000"),  # Group ID
-            client.V1EnvVar(name="TZ", value="UTC"),  # Timezone
-            client.V1EnvVar(name="DEFAULT_WORKSPACE", value="/workspaces"),  
-            client.V1EnvVar(name="VSCODE_EXTENSIONS", value="/config/extensions"),
-            client.V1EnvVar(name="CODE_SERVER_EXTENSIONS_DIR", value="/config/extensions"),
-            client.V1EnvVar(name="VSCODE_USER_DATA_DIR", value="/config/data"),
-            client.V1EnvVar(name="CS_DISABLE_GETTING_STARTED_OVERRIDE", value="true"),
-            client.V1EnvVar(name="VSCODE_DISABLE_TELEMETRY", value="true"),
-            client.V1EnvVar(name="DISABLE_TELEMETRY", value="true"),
-            client.V1EnvVar(name="VSCODE_PROXY_URI", value=f"https://{workspace_ids['subdomain']}-{{{{port}}}}.{app_config.WORKSPACE_DOMAIN}/"),
-            client.V1EnvVar(
-                name="GITHUB_TOKEN",
-                value_from=client.V1EnvVarSource(
-                    secret_key_ref=client.V1SecretKeySelector(
-                        name="workspace-secret",
-                        key="github_token",
-                        optional=True
-                    )
-                )
-            ),
-            client.V1EnvVar(
-                name="GITHUB_USERNAME",
-                value_from=client.V1EnvVarSource(
-                    secret_key_ref=client.V1SecretKeySelector(
-                        name="workspace-secret",
-                        key="github_username",
-                        optional=True
-                    )
-                )
-            ),
-            client.V1EnvVar(
-                name="PASSWORD",
-                value_from=client.V1EnvVarSource(
-                    secret_key_ref=client.V1SecretKeySelector(
-                        name="workspace-secret",
-                        key="password"
-                    )
-                )
-            ),
-            # Docker support
-            client.V1EnvVar(name="DOCKER_HOST", value="unix:///var/run/docker.sock"),
-            # Add this for dev container mode
-            client.V1EnvVar(name="CODE_SERVER_PATH", value="/opt/code-server/bin/code-server" if workspace_config['use_dev_container'] else ""),
-        ],
+        env=base_env_vars,  # Use the combined environment variables
         volume_mounts=_create_code_server_volume_mounts(workspace_config),
         lifecycle=client.V1Lifecycle(
             post_start=client.V1LifecycleHandler(

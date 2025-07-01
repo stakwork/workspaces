@@ -61,6 +61,7 @@ def extract_workspace_config(data):
     # Get custom image configuration
     custom_image = data.get('image', 'linuxserver/code-server:latest')
     custom_image_url = data.get('imageUrl', '')
+    env_vars = data.get('env_vars', [])
     use_custom_image_url = bool(custom_image_url)
     use_dev_container = data.get('useDevContainer', True)
 
@@ -78,5 +79,6 @@ def extract_workspace_config(data):
         'use_custom_image_url': use_custom_image_url,
         'use_dev_container': use_dev_container,
         'github_token': github_token,
-        'github_username': github_username
+        'github_username': github_username,
+        'env_vars': env_vars
     }

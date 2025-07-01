@@ -88,7 +88,8 @@ class PoolService:
         self._load_existing_pools()
     
     def create_pool(self, pool_name: str, minimum_vms: int, repo_name: str, 
-                   branch_name: str, github_pat: str, github_username: str) -> Dict:
+                   branch_name: str, github_pat: str, github_username: str, 
+                   env_vars: List[Dict] = None) -> Dict:
         """Create a new pool"""
         try:
             # Validate inputs
@@ -105,14 +106,26 @@ class PoolService:
             if len(pool_name) > 253:
                 raise ValueError("Pool name is too long (max 253 characters)")
             
+            if env_vars:
+                for env_var in env_vars:
+                    if not env_var.get('name') or not isinstance(env_var.get('name'), str):
+                        raise ValueError("Environment variable name must be a non-empty string")
+                    if env_var.get('value') is None:
+                        raise ValueError("Environment variable value cannot be None")
+            
+            actual_github_pat = github_pat
+            if isinstance(github_pat, dict):
+                actual_github_pat = github_pat.get('value', '')
+
             # Create pool configuration
             pool_config = PoolConfig(
                 pool_name=pool_name,
                 minimum_vms=minimum_vms,
                 repo_name=repo_name,
                 branch_name=branch_name,
-                github_pat=github_pat,
-                github_username=github_username
+                github_pat=actual_github_pat,
+                github_username=github_username,
+                env_vars=env_vars or []
             )
             
             # Store pool configuration in Kubernetes
@@ -136,12 +149,109 @@ class PoolService:
             return {
                 "success": True,
                 "message": f"Pool '{pool_name}' created successfully",
-                "pool": pool_config.to_dict()
+                "pool": pool_config.to_dict(mask_sensitive=True)
             }
             
         except Exception as e:
             logger.error(f"Error creating pool '{pool_name}': {e}")
             raise Exception(f"Failed to create pool: {str(e)}")
+        
+    def update_pool(self, pool_name: str, update_data: Dict) -> Dict:
+        """Update pool configuration"""
+        if pool_name not in self.pools:
+            raise ValueError(f"Pool '{pool_name}' not found")
+        
+        try:
+            pool_config = self.pools[pool_name]
+            
+            # Update allowed fields
+            if 'minimum_vms' in update_data:
+                if not isinstance(update_data['minimum_vms'], int) or update_data['minimum_vms'] < 1:
+                    raise ValueError("minimum_vms must be a positive integer")
+                pool_config.minimum_vms = update_data['minimum_vms']
+            
+            if 'github_username' in update_data:
+                pool_config.github_username = update_data['github_username']
+
+            if 'github_pat' in update_data:
+                pat_data = update_data['github_pat']
+                
+                if isinstance(pat_data, dict):
+                    # New format with masking support
+                    pat_value = pat_data.get('value', '')
+                    is_masked = pat_data.get('masked', False)
+                    
+                    if is_masked and pool_config.github_pat:
+                        # Check if the masked value matches what we would generate
+                        expected_masked = pool_config._mask_value(pool_config.github_pat)
+                        
+                        if pat_value == expected_masked:
+                            # Value unchanged, keep existing
+                            pass  # Don't update github_pat
+                        else:
+                            # Value was modified, use new value
+                            pool_config.github_pat = pat_value
+                    else:
+                        # New PAT or unmasked value
+                        pool_config.github_pat = pat_value
+                elif isinstance(pat_data, str):
+                    # Legacy string format
+                    pool_config.github_pat = pat_data
+            
+            # Handle environment variables with masking support
+            if 'env_vars' in update_data:
+                new_env_vars = []
+                existing_env_vars = {env['name']: env['value'] for env in pool_config.env_vars}
+                
+                for env_var in update_data['env_vars']:
+                    if not isinstance(env_var, dict) or 'name' not in env_var:
+                        continue
+                        
+                    env_name = env_var['name']
+                    env_value = env_var.get('value', '')
+                    is_masked = env_var.get('masked', False)
+                    
+                    # If the value is marked as masked and unchanged, keep the existing value
+                    if is_masked and env_name in existing_env_vars:
+                        # Check if the masked value matches what we would generate
+                        existing_value = existing_env_vars[env_name]
+                        expected_masked = pool_config._mask_env_value(existing_value)
+                        
+                        if env_value == expected_masked:
+                            # Value unchanged, keep existing
+                            new_env_vars.append({
+                                'name': env_name,
+                                'value': existing_value
+                            })
+                        else:
+                            # Value was modified, use new value
+                            new_env_vars.append({
+                                'name': env_name,
+                                'value': env_value
+                            })
+                    else:
+                        # New variable or unmasked value
+                        new_env_vars.append({
+                            'name': env_name,
+                            'value': env_value
+                        })
+                
+                pool_config.env_vars = new_env_vars
+            
+            # Update stored configuration
+            self._store_pool_config(pool_config)
+            
+            logger.info(f"Updated pool '{pool_name}' configuration")
+            
+            return {
+                "success": True,
+                "message": f"Pool '{pool_name}' updated successfully",
+                "pool": pool_config.to_dict(mask_sensitive=True)  # Always mask in responses
+            }
+            
+        except Exception as e:
+            logger.error(f"Error updating pool '{pool_name}': {e}")
+            raise Exception(f"Failed to update pool: {str(e)}")
     
     def list_pools(self) -> List[Dict]:
         """List all pools with their status"""
@@ -150,13 +260,17 @@ class PoolService:
         for pool_name, pool_config in self.pools.items():
             try:
                 status = self._get_pool_status(pool_name)
-                pools_status.append(status.to_dict())
+                status_dict = status.to_dict()
+                # Add masked config info to status
+                status_dict['config'] = pool_config.to_dict(mask_sensitive=True)
+                pools_status.append(status_dict)
             except Exception as e:
                 logger.error(f"Error getting status for pool '{pool_name}': {e}")
                 pools_status.append({
                     'pool_name': pool_name,
                     'error': str(e),
-                    'minimum_vms': pool_config.minimum_vms
+                    'minimum_vms': pool_config.minimum_vms,
+                    'config': pool_config.to_dict(mask_sensitive=True)
                 })
         
         return pools_status
@@ -171,7 +285,7 @@ class PoolService:
             status = self._get_pool_status(pool_name)
             
             return {
-                "config": pool_config.to_dict(),
+                "config": pool_config.to_dict(mask_sensitive=True),  # Always mask sensitive data
                 "status": status.to_dict()
             }
         except Exception as e:
@@ -472,6 +586,8 @@ class PoolService:
                     pool_data = json.loads(cm.data.get("pool.json", "{}"))
                     if 'github_username' not in pool_data:
                         pool_data['github_username'] = None
+                    if 'env_vars' not in pool_data:
+                        pool_data['env_vars'] = []
 
                     pool_config = PoolConfig(
                         pool_name=pool_data['pool_name'],
@@ -480,6 +596,7 @@ class PoolService:
                         branch_name=pool_data['branch_name'],
                         github_pat=pool_data['github_pat'],
                         github_username=pool_data['github_username'],
+                        env_vars=pool_data['env_vars'],
                         created_at=datetime.fromisoformat(pool_data['created_at'])
                     )
                     
@@ -504,6 +621,7 @@ class PoolService:
             'branch_name': pool_config.branch_name,
             'github_pat': pool_config.github_pat,  # In production, this should be stored in a Secret
             'github_username': pool_config.github_username,
+            'env_vars': pool_config.env_vars,
             'created_at': pool_config.created_at.isoformat()
         }
         
@@ -785,7 +903,8 @@ class PoolService:
                             'githubToken': pool_config.github_pat,
                             'githubUsername': pool_config.github_username,
                             'image': 'linuxserver/code-server:latest',
-                            'useDevContainer': True
+                            'useDevContainer': True,
+                            'env_vars': pool_config.env_vars
                         }
                         
                         result = workspace_service.create_workspace(workspace_request)

@@ -12,6 +12,20 @@ data:
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Pod Manager</title>
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+        <style>
+        .env-var-row {
+            display: flex;
+            gap: 8px;
+            align-items: end;
+            margin-bottom: 8px;
+        }
+        .env-var-row input {
+            flex: 1;
+        }
+        .env-var-row button {
+            flex-shrink: 0;
+        }
+        </style>
     </head>
     <body class="bg-gray-100 font-sans">
         <!-- Login Modal -->
@@ -242,6 +256,34 @@ data:
                                 Create a token with <b>repo</b> access for private repositories.
                             </p>
                         </div>
+
+                        <!-- Environment Variables Section -->
+                        <div class="mt-6">
+                            <h3 class="text-lg font-medium mb-3">Environment Variables (Optional)</h3>
+                            <div id="poolEnvVars" class="space-y-2 mb-4">
+                                <div class="env-var-row">
+                                    <div class="flex-1">
+                                        <input type="text" placeholder="Variable name (e.g., NODE_ENV)" 
+                                            class="w-full p-2 border border-gray-300 rounded-md env-var-name">
+                                    </div>
+                                    <div class="flex-1">
+                                        <input type="text" placeholder="Variable value (e.g., development)" 
+                                            class="w-full p-2 border border-gray-300 rounded-md env-var-value">
+                                    </div>
+                                    <button type="button" class="remove-env-var bg-red-500 text-white py-2 px-3 rounded-md text-sm hover:bg-red-600">
+                                        Remove
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="flex space-x-2">
+                                <button type="button" id="addPoolEnvVar" class="bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300">
+                                    + Add Environment Variable
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-2">
+                                These environment variables will be available in all pods created by this pool.
+                            </p>
+                        </div>
                         
                         <div class="mt-6">
                             <button type="submit" class="bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-600">
@@ -465,6 +507,14 @@ data:
             // Add repository button
             document.getElementById('addRepoBtn').addEventListener('click', addRepositoryInput);
             
+            document.getElementById('addPoolEnvVar').addEventListener('click', addPoolEnvVar);
+
+            document.addEventListener('click', function(e) {
+                if (e.target.classList.contains('remove-env-var')) {
+                    e.target.closest('.env-var-row').remove();
+                }
+            });
+            
             // Image config type radio buttons
             const imageConfigRadios = document.querySelectorAll('input[name="imageConfigType"]');
             imageConfigRadios.forEach(radio => {
@@ -488,6 +538,47 @@ data:
                 createPool();
             });
         }
+
+        function addPoolEnvVar() {
+            const envVarsContainer = document.getElementById('poolEnvVars');
+            const newRow = document.createElement('div');
+            newRow.className = 'env-var-row';
+            newRow.innerHTML = `
+                <div class="flex-1">
+                    <input type="text" placeholder="Variable name (e.g., NODE_ENV)" 
+                        class="w-full p-2 border border-gray-300 rounded-md env-var-name">
+                </div>
+                <div class="flex-1">
+                    <input type="text" placeholder="Variable value (e.g., development)" 
+                        class="w-full p-2 border border-gray-300 rounded-md env-var-value">
+                </div>
+                <button type="button" class="remove-env-var bg-red-500 text-white py-2 px-3 rounded-md text-sm hover:bg-red-600">
+                    Remove
+                </button>
+            `;
+            envVarsContainer.appendChild(newRow);
+        }
+
+        function collectPoolEnvVars() {
+            const envVarRows = document.querySelectorAll('#poolEnvVars .env-var-row');
+            const envVars = [];
+            
+            envVarRows.forEach(row => {
+                const nameInput = row.querySelector('.env-var-name');
+                const valueInput = row.querySelector('.env-var-value');
+                
+                if (nameInput.value.trim() && valueInput.value.trim()) {
+                    envVars.push({
+                        name: nameInput.value.trim(),
+                        value: valueInput.value.trim(),
+                        masked: false  // New values are never masked
+                    });
+                }
+            });
+            
+            return envVars;
+        }
+
 
         // Function to mark workspace as used
         async function markWorkspaceAsUsed(poolName, workspaceId) {
@@ -756,6 +847,11 @@ data:
                         } else {
                             console.log("Pool has no workspaces, check the logs...", pool)
                         }
+
+                        let env_vars_info = '';
+                        if (pool.config && pool.config.env_vars && pool.config.env_vars.length > 0) {
+                            env_vars_info = `<p><strong>Environment Variables:</strong> ${pool.config.env_vars.length} configured</p>`;
+                        }
                         
                         poolEl.innerHTML = `
                             <div class="flex justify-between items-start">
@@ -770,6 +866,7 @@ data:
                                         <p><strong>Current VMs:</strong> ${pool.current_vms}</p>
                                         <p><strong>Running:</strong> ${pool.running_vms} | <strong>Pending:</strong> ${pool.pending_vms} | <strong>Failed:</strong> ${pool.failed_vms}</p>
                                         <p><strong>Used:</strong> ${pool.used_vms || 0} | <strong>Available:</strong> ${pool.unused_vms || 0}</p>
+                                        ${env_vars_info}
                                         <p class="${statusColor}"><strong>Status:</strong> ${statusText}</p>
                                     </div>
                                     <div class="mt-2">
@@ -779,11 +876,10 @@ data:
                                     </div>
                                 </div>
                                 <div class="space-x-2">
-                                    <!-- button onclick="getAvailableWorkspace('${pool.pool_name}')" 
-                                        class="bg-blue-500 text-white py-1 px-3 rounded-md text-sm"
-                                        ${(pool.unused_vms || 0) === 0 ? 'disabled' : ''}>
-                                        Get Available (${pool.unused_vms || 0})
-                                    </button -->
+                                    <button onclick="editPool('${pool.pool_name}')" 
+                                        class="bg-blue-500 text-white py-1 px-3 rounded-md text-sm hover:bg-blue-600">
+                                        Edit
+                                    </button>
                                     <button onclick="scalePool('${pool.pool_name}')" class="bg-yellow-500 text-white py-1 px-3 rounded-md text-sm">
                                         Scale
                                     </button>
@@ -822,6 +918,7 @@ data:
             const branchName = document.getElementById('poolBranchName').value.trim();
             const githubPat = document.getElementById('poolGithubPat').value.trim();
             const githubUsername = document.getElementById('poolGithubUsername').value.trim();
+            const envVars = collectPoolEnvVars();
             
             if (!poolName || !repoName || !branchName) {
                 alert('Please fill in all required fields');
@@ -850,7 +947,8 @@ data:
                         repo_name: repoName,
                         branch_name: branchName,
                         github_pat: githubPat,
-                        github_username: githubUsername
+                        github_username: githubUsername,
+                        env_vars: envVars
                     })
                 });
                 
@@ -871,6 +969,24 @@ data:
                     document.getElementById('minimumVms').value = '1';
                     document.getElementById('poolBranchName').value = 'master';
                     document.getElementById('poolGithubUsername').value = '';
+
+                    // Clear environment variables
+                    const envVarsContainer = document.getElementById('poolEnvVars');
+                    envVarsContainer.innerHTML = `
+                        <div class="env-var-row">
+                            <div class="flex-1">
+                                <input type="text" placeholder="Variable name (e.g., NODE_ENV)" 
+                                    class="w-full p-2 border border-gray-300 rounded-md env-var-name">
+                            </div>
+                            <div class="flex-1">
+                                <input type="text" placeholder="Variable value (e.g., development)" 
+                                    class="w-full p-2 border border-gray-300 rounded-md env-var-value">
+                            </div>
+                            <button type="button" class="remove-env-var bg-red-500 text-white py-2 px-3 rounded-md text-sm hover:bg-red-600">
+                                Remove
+                            </button>
+                        </div>
+                    `;
                     
                     // Reload pools
                     loadPools();
@@ -886,6 +1002,317 @@ data:
                 }
             }
         }
+
+        async function editPool(poolName) {
+            try {
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}`);
+                const data = await response.json();
+                
+                if (response.ok && data.config) {
+                    showEditPoolModal(data.config);
+                } else {
+                    alert(`Error: ${data.error || 'Failed to load pool configuration'}`);
+                }
+            } catch (error) {
+                console.error('Error loading pool for edit:', error);
+                if (error.message !== 'Authentication required') {
+                    alert('Failed to load pool configuration. Please try again later.');
+                }
+            }
+        }
+
+        function showEditPoolModal(poolConfig) {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50';
+            modal.id = 'editPoolModal';
+            
+            // Handle GitHub PAT display
+            let githubPatValue = '';
+            let githubPatMasked = false;
+            if (typeof poolConfig.github_pat === 'object' && poolConfig.github_pat) {
+                githubPatValue = poolConfig.github_pat.value || '';
+                githubPatMasked = poolConfig.github_pat.masked || false;
+            } else if (typeof poolConfig.github_pat === 'string') {
+                githubPatValue = poolConfig.github_pat;
+                githubPatMasked = false;
+            }
+            
+            const githubPatPlaceholder = githubPatMasked ? 'Leave unchanged or enter new token' : 'GitHub Personal Access Token';
+            const githubPatClass = githubPatMasked ? 'masked-input' : '';
+            
+            let envVarsHtml = '';
+            if (poolConfig.env_vars && poolConfig.env_vars.length > 0) {
+                poolConfig.env_vars.forEach((envVar, index) => {
+                    const isMasked = envVar.masked || false;
+                    const placeholder = isMasked ? 'Leave unchanged or enter new value' : 'Variable value';
+                    const valueClass = isMasked ? 'masked-input' : '';
+                    
+                    envVarsHtml += `
+                        <div class="env-var-row" data-original-masked="${isMasked}">
+                            <div class="flex-1">
+                                <input type="text" value="${envVar.name}" 
+                                    class="w-full p-2 border border-gray-300 rounded-md env-var-name"
+                                    ${isMasked ? 'readonly' : ''}>
+                            </div>
+                            <div class="flex-1">
+                                <input type="text" value="${envVar.value}" 
+                                    placeholder="${placeholder}"
+                                    class="w-full p-2 border border-gray-300 rounded-md env-var-value ${valueClass}"
+                                    data-original-value="${envVar.value}"
+                                    data-masked="${isMasked}">
+                                ${isMasked ? '<p class="text-xs text-gray-500 mt-1">Showing masked value - modify to change</p>' : ''}
+                            </div>
+                            <button type="button" class="remove-env-var bg-red-500 text-white py-2 px-3 rounded-md text-sm hover:bg-red-600">
+                                Remove
+                            </button>
+                        </div>
+                    `;
+                });
+            } else {
+                envVarsHtml = `
+                    <div class="env-var-row">
+                        <div class="flex-1">
+                            <input type="text" placeholder="Variable name (e.g., NODE_ENV)" 
+                                class="w-full p-2 border border-gray-300 rounded-md env-var-name">
+                        </div>
+                        <div class="flex-1">
+                            <input type="text" placeholder="Variable value (e.g., development)" 
+                                class="w-full p-2 border border-gray-300 rounded-md env-var-value">
+                        </div>
+                        <button type="button" class="remove-env-var bg-red-500 text-white py-2 px-3 rounded-md text-sm hover:bg-red-600">
+                            Remove
+                        </button>
+                    </div>
+                `;
+            }
+            
+            modal.innerHTML = `
+                <div class="relative top-20 mx-auto p-5 border w-4/5 max-w-4xl shadow-lg rounded-md bg-white">
+                    <div class="mt-3">
+                        <h3 class="text-lg font-bold text-gray-900 mb-4">Edit Pool: ${poolConfig.pool_name}</h3>
+                        <form id="editPoolForm">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Minimum VMs</label>
+                                    <input type="number" id="editMinimumVms" min="1" value="${poolConfig.minimum_vms}"
+                                        class="w-full p-2 border border-gray-300 rounded-md" required>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-gray-700 mb-2">GitHub Username</label>
+                                    <input type="text" id="editGithubUsername" value="${poolConfig.github_username || ''}"
+                                        class="w-full p-2 border border-gray-300 rounded-md">
+                                </div>
+                            </div>
+                            
+                            <!-- GitHub PAT Section -->
+                            <div class="mb-6">
+                                <label class="block text-gray-700 mb-2">GitHub Personal Access Token</label>
+                                <input type="password" id="editGithubPat" 
+                                    value="${githubPatValue}"
+                                    placeholder="${githubPatPlaceholder}"
+                                    class="w-full p-2 border border-gray-300 rounded-md ${githubPatClass}"
+                                    data-original-value="${githubPatValue}"
+                                    data-masked="${githubPatMasked}">
+                                ${githubPatMasked ? '<p class="text-xs text-gray-500 mt-1">Showing masked token - modify to change</p>' : ''}
+                                <p class="text-xs text-gray-500 mt-1">
+                                    <span class="text-red-500">Required for private repositories.</span> 
+                                    Create a token with <b>repo</b> access.
+                                </p>
+                            </div>
+                            
+                            <div class="mb-6">
+                                <h4 class="text-md font-medium mb-3">Environment Variables</h4>
+                                <div class="mb-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                                    <p class="text-sm text-yellow-800">
+                                        <strong>Note:</strong> Existing values are masked for security. 
+                                        Leave them unchanged to keep current values, or modify to update them.
+                                    </p>
+                                </div>
+                                <div id="editPoolEnvVars" class="space-y-2 mb-4">
+                                    ${envVarsHtml}
+                                </div>
+                                <button type="button" id="addEditPoolEnvVar" class="bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300">
+                                    + Add Environment Variable
+                                </button>
+                            </div>
+                            
+                            <div class="flex items-center justify-between">
+                                <button type="button" onclick="closeEditPoolModal()" class="bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600">
+                                    Cancel
+                                </button>
+                                <button type="submit" class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600">
+                                    Update Pool
+                                </button>
+                            </div>
+                        </form>
+                        <div id="editPoolStatus" class="mt-4 hidden"></div>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Add event listeners (same as before)
+            document.getElementById('addEditPoolEnvVar').addEventListener('click', function() {
+                const envVarsContainer = document.getElementById('editPoolEnvVars');
+                const newRow = document.createElement('div');
+                newRow.className = 'env-var-row';
+                newRow.innerHTML = `
+                    <div class="flex-1">
+                        <input type="text" placeholder="Variable name (e.g., NODE_ENV)" 
+                            class="w-full p-2 border border-gray-300 rounded-md env-var-name">
+                    </div>
+                    <div class="flex-1">
+                        <input type="text" placeholder="Variable value (e.g., development)" 
+                            class="w-full p-2 border border-gray-300 rounded-md env-var-value">
+                    </div>
+                    <button type="button" class="remove-env-var bg-red-500 text-white py-2 px-3 rounded-md text-sm hover:bg-red-600">
+                        Remove
+                    </button>
+                `;
+                envVarsContainer.appendChild(newRow);
+            });
+            
+            // Add styling for masked inputs
+            const style = document.createElement('style');
+            style.textContent = `
+                .masked-input {
+                    background-color: #f9f9f9;
+                    font-family: monospace;
+                    letter-spacing: 1px;
+                }
+                .masked-input:focus {
+                    background-color: white;
+                }
+            `;
+            document.head.appendChild(style);
+            
+            document.getElementById('editPoolForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                updatePool(poolConfig.pool_name);
+            });
+            
+            // Handle remove buttons
+            modal.addEventListener('click', function(e) {
+                if (e.target.classList.contains('remove-env-var')) {
+                    e.target.closest('.env-var-row').remove();
+                }
+            });
+        }
+
+
+        function closeEditPoolModal() {
+            const modal = document.getElementById('editPoolModal');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        async function updatePool(poolName) {
+            const minimumVms = parseInt(document.getElementById('editMinimumVms').value);
+            const githubUsername = document.getElementById('editGithubUsername').value.trim();
+            
+            // Handle GitHub PAT with masking awareness
+            const githubPatInput = document.getElementById('editGithubPat');
+            const originalPatValue = githubPatInput.dataset.originalValue;
+            const currentPatValue = githubPatInput.value.trim();
+            const patWasMasked = githubPatInput.dataset.masked === 'true';
+            
+            // Determine if the PAT was changed
+            const patChanged = patWasMasked ? (currentPatValue !== originalPatValue) : true;
+            
+            const githubPat = {
+                value: currentPatValue,
+                masked: patWasMasked && !patChanged  // Keep masked flag if unchanged
+            };
+            
+            // Collect environment variables with masking awareness
+            const envVarRows = document.querySelectorAll('#editPoolEnvVars .env-var-row');
+            const envVars = [];
+            
+            envVarRows.forEach(row => {
+                const nameInput = row.querySelector('.env-var-name');
+                const valueInput = row.querySelector('.env-var-value');
+                
+                if (nameInput.value.trim()) {
+                    const originalValue = valueInput.dataset.originalValue;
+                    const currentValue = valueInput.value.trim();
+                    const wasMasked = valueInput.dataset.masked === 'true';
+                    
+                    // Determine if the value was changed
+                    const valueChanged = wasMasked ? (currentValue !== originalValue) : true;
+                    
+                    envVars.push({
+                        name: nameInput.value.trim(),
+                        value: currentValue,
+                        masked: wasMasked && !valueChanged  // Keep masked flag if unchanged
+                    });
+                }
+            });
+            
+            const statusEl = document.getElementById('editPoolStatus');
+            statusEl.className = 'mt-4 p-4 bg-yellow-100 text-yellow-800 rounded-md';
+            statusEl.innerHTML = 'Updating pool...';
+            statusEl.classList.remove('hidden');
+            
+            try {
+                const response = await authenticatedFetch(`${API_BASE_URL}/pools/${encodePoolName(poolName)}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        minimum_vms: minimumVms,
+                        github_username: githubUsername,
+                        github_pat: githubPat,  // Send PAT object with masking info
+                        env_vars: envVars
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    statusEl.className = 'mt-4 p-4 bg-green-100 text-green-800 rounded-md';
+                    
+                    // Count changed vs unchanged items
+                    const changedVars = envVars.filter(env => !env.masked).length;
+                    const unchangedVars = envVars.filter(env => env.masked).length;
+                    const patStatus = githubPat.masked ? 'unchanged' : 'updated';
+                    
+                    let updateSummary = `GitHub PAT: ${patStatus}`;
+                    if (envVars.length > 0) {
+                        updateSummary += `<br>Environment Variables: ${envVars.length} total`;
+                        if (changedVars > 0 && unchangedVars > 0) {
+                            updateSummary += ` (${changedVars} updated, ${unchangedVars} unchanged)`;
+                        } else if (unchangedVars > 0) {
+                            updateSummary += ` (all unchanged)`;
+                        }
+                    }
+                    
+                    statusEl.innerHTML = `
+                        <p class="font-semibold">Pool updated successfully!</p>
+                        <p>${updateSummary}</p>
+                    `;
+                    
+                    // Reload pools and close modal after a delay
+                    setTimeout(() => {
+                        closeEditPoolModal();
+                        loadPools();
+                    }, 1500);
+                } else {
+                    statusEl.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
+                    statusEl.innerHTML = `<p>Error: ${data.error || 'Failed to update pool'}</p>`;
+                }
+            } catch (error) {
+                console.error('Error updating pool:', error);
+                if (error.message !== 'Authentication required') {
+                    statusEl.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
+                    statusEl.innerHTML = '<p>Failed to update pool. Please try again later.</p>';
+                }
+            }
+        }
+
 
         // Function to toggle pool workspaces visibility
         async function togglePoolWorkspaces(poolName) {

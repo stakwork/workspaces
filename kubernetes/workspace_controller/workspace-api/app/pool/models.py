@@ -13,21 +13,60 @@ class PoolConfig:
     branch_name: str
     github_pat: Optional[str] = None
     github_username: Optional[str] = None
+    env_vars: List[Dict] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
+
+    def _mask_value(self, value: str) -> str:
+        """Mask sensitive value showing only first 2 and last 2 characters"""
+        if not value:
+            return ""
+        if len(value) <= 4:
+            return "*" * len(value)
+        return value[:2] + "*" * (len(value) - 4) + value[-2:]
     
-    def to_dict(self):
+    def _mask_env_value(self, value: str) -> str:
+        """Mask environment variable value showing only first 2 and last 2 characters"""
+        return self._mask_value(value)
+    
+    def to_dict(self, mask_sensitive=True):
+        """Convert to dict, optionally masking sensitive values"""
+        env_vars_output = []
+        if self.env_vars and mask_sensitive:
+            env_vars_output = [
+                {
+                    'name': env_var['name'],
+                    'value': self._mask_env_value(env_var['value']),
+                    'masked': True
+                }
+                for env_var in self.env_vars
+            ]
+        elif self.env_vars:
+            env_vars_output = self.env_vars
+        
+        # Mask GitHub PAT
+        github_pat_output = '********'
+        if mask_sensitive and self.github_pat:
+            github_pat_output = {
+                'value': self._mask_value(self.github_pat),
+                'masked': True
+            }
+        elif not mask_sensitive:
+            github_pat_output = self.github_pat
+            
         return {
             'pool_name': self.pool_name,
             'minimum_vms': self.minimum_vms,
             'repo_name': self.repo_name,
             'branch_name': self.branch_name,
-            'github_pat': '********',  # Never expose the actual PAT
+            'github_pat': github_pat_output,
             'github_username': self.github_username,
+            'env_vars': env_vars_output,
             'created_at': self.created_at.isoformat()
         }
     
-    def to_json(self):
-        return json.dumps(self.to_dict())
+    def to_json(self, mask_sensitive=True):
+        return json.dumps(self.to_dict(mask_sensitive))
+
 
 
 @dataclass
