@@ -333,6 +333,15 @@ def create_deployment(workspace_ids, workspace_config):
     # Define containers
     code_server_container = _create_code_server_container(workspace_ids, workspace_config)
     port_detector_container = _create_port_detector_container()
+    traffic_monitor_container = _create_traffic_monitor_container()
+
+    volumes = _create_volumes(workspace_ids)
+    volumes.append(
+        client.V1Volume(
+            name="shared-data",
+            empty_dir=client.V1EmptyDirVolumeSource()
+        )
+    )
 
     deployment = client.V1Deployment(
         metadata=client.V1ObjectMeta(
@@ -341,6 +350,9 @@ def create_deployment(workspace_ids, workspace_config):
             labels={
                 "app": "workspace",
                 "allowed-registry-access": "true"
+            },
+            annotations={
+                "traffic-monitor.workspace/created": str(int(time.time()))
             }
         ),
         spec=client.V1DeploymentSpec(
@@ -365,7 +377,7 @@ def create_deployment(workspace_ids, workspace_config):
                     # host_network=True,
                     service_account_name="workspace-controller",
                     init_containers=init_containers,
-                    containers=[code_server_container, port_detector_container],
+                    containers=[code_server_container, port_detector_container, traffic_monitor_container],
                     volumes=volumes,
                     image_pull_secrets=[
                         client.V1LocalObjectReference(name="registry-credentials")
@@ -646,6 +658,149 @@ def _create_code_server_container(workspace_ids, workspace_config):
                 "cpu": "2",
                 "memory": "8Gi"
             }
+        )
+    )
+
+def _create_traffic_monitor_container():
+    """Create a sidecar container to monitor actual traffic"""
+    return client.V1Container(
+        name="traffic-monitor",
+        image="alpine:3.18",
+        command=["/bin/sh", "-c"],
+        args=["""
+            set -e
+            echo "Installing required packages..."
+            apk add --no-cache curl procps lsof net-tools
+            
+            echo "Traffic monitor started with simplified debugging"
+            
+            # Create a simple traffic tracker
+            echo "0" > /shared/last_traffic_timestamp
+            echo "0" > /shared/request_count
+            echo "0" > /shared/last_health_check_timestamp
+            
+            # Function to convert ISO timestamp to epoch
+            iso_to_epoch() {
+                local iso_time="$1"
+                # Convert ISO format like "2025-07-11T10:08:34.139Z" to epoch
+                # Remove the Z and milliseconds, then convert
+                local clean_time=$(echo "$iso_time" | sed 's/\.[0-9]*Z$/Z/' | sed 's/Z$//')
+                date -d "$clean_time" +%s 2>/dev/null || echo "0"
+            }
+            
+            while true; do
+                echo "$(date): ===== TRAFFIC MONITORING CYCLE ====="
+                
+                # Check for port 8444 being used
+                echo "📡 CONNECTION DETAILS:"
+                PORT_8444_CONNECTIONS=$(netstat -an 2>/dev/null | grep ":8444 " | grep ESTABLISHED | wc -l || echo "0")
+                PORT_8444_LISTENING=$(netstat -an 2>/dev/null | grep ":8444 " | grep LISTEN | wc -l || echo "0")
+                
+                if [ "$PORT_8444_CONNECTIONS" -gt 0 ] || [ "$PORT_8444_LISTENING" -gt 0 ]; then
+                    echo "  ✓ Port 8444 - Established: $PORT_8444_CONNECTIONS, Listening: $PORT_8444_LISTENING"
+                    
+                    # Show connection details for port 8444
+                    netstat -an 2>/dev/null | grep ":8444 " | while read line; do
+                        echo "    $line"
+                    done
+                else
+                    echo "  ⚫ Port 8444 - No activity"
+                fi
+                
+                # Check health endpoint on port 15552
+                echo "🏥 HEALTH ENDPOINT CHECK:"
+                HEALTH_ACTIVITY=0
+                HEALTH_RESPONSE=""
+                
+                # Try to reach the health endpoint
+                HEALTH_RESPONSE=$(curl -s --connect-timeout 5 --max-time 10 "http://localhost:15552/health" 2>/dev/null || echo "")
+                
+                if [ -n "$HEALTH_RESPONSE" ]; then
+                    echo "  ✓ Health endpoint responded: $HEALTH_RESPONSE"
+                    
+                    # Extract last_hit timestamp using sed
+                    LAST_HIT=$(echo "$HEALTH_RESPONSE" | sed -n 's/.*"last_hit":"\([^"]*\)".*/\1/p')
+                    
+                    if [ -n "$LAST_HIT" ]; then
+                        echo "  📅 Last hit timestamp: $LAST_HIT"
+                        
+                        # Convert ISO timestamp to epoch
+                        LAST_HIT_EPOCH=$(iso_to_epoch "$LAST_HIT")
+                        
+                        if [ "$LAST_HIT_EPOCH" -gt 0 ]; then
+                            echo "  🔢 Last hit epoch: $LAST_HIT_EPOCH"
+                            
+                            # Save the epoch timestamp for cronjob to pick up
+                            echo "$LAST_HIT_EPOCH" > /shared/last_health_check_timestamp
+                            
+                            # Check if this represents recent activity (within last 30 minutes)
+                            CURRENT_TIMESTAMP=$(date +%s)
+                            TIME_DIFF=$((CURRENT_TIMESTAMP - LAST_HIT_EPOCH))
+                            
+                            echo "  ⏱️ Time since last hit: ${TIME_DIFF} seconds"
+                            
+                            # Consider it active if last hit was within 30 minutes (1800 seconds)
+                            if [ "$TIME_DIFF" -le 1800 ]; then
+                                HEALTH_ACTIVITY=1
+                                echo "  ✅ Recent activity detected (within 30 minutes)"
+                            else
+                                echo "  ⏰ Last hit was too long ago (${TIME_DIFF}s)"
+                            fi
+                        else
+                            echo "  ⚠️ Could not convert timestamp to epoch"
+                        fi
+                    else
+                        echo "  ⚠️ Could not parse last_hit from response"
+                    fi
+                else
+                    echo "  ⚫ Health endpoint not responding"
+                fi
+                
+                # Activity detection logic
+                ACTIVITY_DETECTED=0
+                ACTIVITY_REASONS=""
+                
+                if [ "$PORT_8444_CONNECTIONS" -gt 0 ] || [ "$PORT_8444_LISTENING" -gt 0 ]; then
+                    ACTIVITY_DETECTED=1
+                    ACTIVITY_REASONS="$ACTIVITY_REASONS port-8444-activity"
+                fi
+                
+                if [ "$HEALTH_ACTIVITY" -eq 1 ]; then
+                    ACTIVITY_DETECTED=1
+                    ACTIVITY_REASONS="$ACTIVITY_REASONS health-endpoint-recent-activity"
+                fi
+                
+                echo "🎯 ACTIVITY SUMMARY:"
+                if [ "$ACTIVITY_DETECTED" -eq 1 ]; then
+                    date +%s > /shared/last_traffic_timestamp
+                    CURRENT_COUNT=$(cat /shared/request_count)
+                    echo $((CURRENT_COUNT + 1)) > /shared/request_count
+                    echo "  ✅ USER ACTIVITY DETECTED!"
+                    echo "  📋 Reasons: $ACTIVITY_REASONS"
+                    echo "  📊 Total activity events: $((CURRENT_COUNT + 1))"
+                else
+                    echo "  ⭕ No significant activity detected"
+                fi
+                
+                echo "$(date): ===== END MONITORING CYCLE ====="
+                echo ""
+                sleep 5
+            done
+        """],
+        volume_mounts=[
+            client.V1VolumeMount(
+                name="shared-data",
+                mount_path="/shared"
+            ),
+            client.V1VolumeMount(
+                name="workspace-data",
+                mount_path="/workspaces",
+                sub_path="workspaces"
+            )
+        ],
+        resources=client.V1ResourceRequirements(
+            requests={"cpu": "10m", "memory": "20Mi"},
+            limits={"cpu": "50m", "memory": "50Mi"}
         )
     )
 

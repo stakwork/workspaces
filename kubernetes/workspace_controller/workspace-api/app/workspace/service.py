@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime
 from app.config import app_config
 from app.utils.generators import generate_workspace_identifiers, extract_workspace_config
@@ -260,6 +261,117 @@ class WorkspaceService:
             workspace_info["useDevContainer"] = workspace_config['use_dev_container']
             
         return workspace_info
+    
+    def cleanup_inactive_workspaces(self, max_idle_hours=6):
+        """Clean up workspaces that haven't received traffic in X hours"""
+        try:
+            cleanup_results = []
+            
+            # Get all workspace namespaces
+            namespaces = self.core_v1.list_namespace(label_selector="app=workspace")
+            
+            for ns in namespaces.items:
+                try:
+                    workspace_id = ns.metadata.labels.get("workspaceId")
+                    if not workspace_id:
+                        continue
+                        
+                    namespace_name = ns.metadata.name
+                    
+                    # Check if pods exist
+                    pods = self.core_v1.list_namespaced_pod(
+                        namespace_name, 
+                        label_selector="app=code-server"
+                    )
+                    
+                    if not pods.items:
+                        continue
+                        
+                    pod_name = pods.items[0].metadata.name
+                    
+                    # Get traffic stats
+                    try:
+                        # Get last traffic timestamp
+                        last_traffic_cmd = ['cat', '/shared/last_traffic_timestamp']
+                        last_traffic_resp = self.core_v1.connect_get_namespaced_pod_exec(
+                            pod_name,
+                            namespace_name,
+                            container='traffic-monitor',
+                            command=last_traffic_cmd,
+                            stderr=True,
+                            stdin=False,
+                            stdout=True,
+                            tty=False
+                        )
+                        
+                        last_traffic_timestamp = int(last_traffic_resp.strip() or "0")
+                        
+                        # Get deployment creation time
+                        deployment = self.apps_v1.read_namespaced_deployment(
+                            name="code-server",
+                            namespace=namespace_name
+                        )
+                        
+                        created_annotation = deployment.metadata.annotations.get("traffic-monitor.workspace/created")
+                        deployment_created = int(created_annotation) if created_annotation else int(time.time())
+                        
+                        current_time = int(time.time())
+                        
+                        # Determine if workspace should be cleaned up
+                        should_cleanup = False
+                        reason = ""
+                        
+                        if last_traffic_timestamp == 0:
+                            # No traffic ever received
+                            hours_since_creation = (current_time - deployment_created) / 3600
+                            if hours_since_creation > max_idle_hours:
+                                should_cleanup = True
+                                reason = f"No traffic received in {hours_since_creation:.1f} hours since creation"
+                        else:
+                            # Traffic was received, check how long ago
+                            hours_since_last_traffic = (current_time - last_traffic_timestamp) / 3600
+                            if hours_since_last_traffic > max_idle_hours:
+                                should_cleanup = True
+                                reason = f"No traffic for {hours_since_last_traffic:.1f} hours"
+                        
+                        if should_cleanup:
+                            logger.info(f"Cleaning up workspace {workspace_id}: {reason}")
+                            
+                            # Delete the workspace
+                            self.core_v1.delete_namespace(namespace_name)
+                            
+                            cleanup_results.append({
+                                "workspace_id": workspace_id,
+                                "namespace": namespace_name,
+                                "action": "deleted",
+                                "reason": reason
+                            })
+                        else:
+                            cleanup_results.append({
+                                "workspace_id": workspace_id,
+                                "namespace": namespace_name,
+                                "action": "kept",
+                                "reason": "Still active or recently created"
+                            })
+                            
+                    except Exception as e:
+                        logger.error(f"Error checking traffic for workspace {workspace_id}: {e}")
+                        cleanup_results.append({
+                            "workspace_id": workspace_id,
+                            "namespace": namespace_name,
+                            "action": "error",
+                            "reason": str(e)
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing namespace {ns.metadata.name}: {e}")
+                    continue
+                    
+            return cleanup_results
+            
+        except Exception as e:
+            logger.error(f"Error in cleanup_inactive_workspaces: {e}")
+            raise Exception(f"Failed to cleanup workspaces: {str(e)}")
 
 
 # Global service instance
