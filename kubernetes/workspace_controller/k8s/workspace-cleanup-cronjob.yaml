@@ -1,0 +1,346 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: workspace-cleanup
+  namespace: workspace-system
+spec:
+  schedule: "*/2 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: workspace-controller
+          containers:
+          - name: cleanup
+            image: python:3.9-slim
+            command:
+            - /bin/bash
+            - -c
+            args:
+            - |
+              set -e
+              echo "Installing dependencies..."
+              pip install kubernetes requests
+              
+              echo "Creating cleanup script..."
+              cat > /tmp/cleanup_job.py << 'EOF'
+              #!/usr/bin/env python3
+              import os
+              import sys
+              import json
+              import logging
+              import time
+              import requests
+              from datetime import datetime, timezone
+              from kubernetes import client, config
+
+              logging.basicConfig(level=logging.INFO)
+              logger = logging.getLogger(__name__)
+
+              class WorkspaceCleanupService:
+                  def __init__(self):
+                      try:
+                          config.load_incluster_config()
+                      except:
+                          config.load_kube_config()
+                      
+                      self.core_v1 = client.CoreV1Api()
+                      self.apps_v1 = client.AppsV1Api()
+                  
+                  def cleanup_inactive_workspaces(self, max_idle_hours=24):
+                      """Mark workspaces as unused if they haven't received traffic"""
+                      try:
+                          cleanup_results = []
+                          
+                          # Get all workspace namespaces
+                          namespaces = self.core_v1.list_namespace(label_selector="app=workspace")
+                          logger.info(f"Found {len(namespaces.items)} workspace namespaces")
+                          
+                          for ns in namespaces.items:
+                              try:
+                                  workspace_id = ns.metadata.labels.get("workspaceId")
+                                  if not workspace_id:
+                                      logger.warning(f"Namespace {ns.metadata.name} missing workspaceId label")
+                                      continue
+                                      
+                                  namespace_name = ns.metadata.name
+                                  pool_name = ns.metadata.labels.get("pool")
+                                  
+                                  logger.info(f"Checking workspace {workspace_id} in namespace {namespace_name} (pool: {pool_name})")
+                                  
+                                  # Check if pods exist
+                                  pods = self.core_v1.list_namespaced_pod(
+                                      namespace_name, 
+                                      label_selector="app=code-server"
+                                  )
+                                  
+                                  if not pods.items:
+                                      logger.info(f"No pods found for workspace {workspace_id}")
+                                      continue
+                                      
+                                  pod = pods.items[0]
+                                  pod_name = pod.metadata.name
+                                  pod_ip = pod.status.pod_ip
+                                  
+                                  logger.info(f"Found pod {pod_name} with IP {pod_ip} for workspace {workspace_id}")
+                                  
+                                  # Check current usage status
+                                  current_usage = self._get_workspace_usage_status(namespace_name)
+                                  current_status = current_usage.get('status', 'unused')
+                                  
+                                  logger.info(f"Current usage status for {workspace_id}: {current_status}")
+                                  
+                                  # Skip if already marked as unused
+                                  if current_status == 'unused':
+                                      logger.info(f"Workspace {workspace_id} already marked as unused")
+                                      cleanup_results.append({
+                                          "workspace_id": workspace_id,
+                                          "namespace": namespace_name,
+                                          "pool": pool_name,
+                                          "action": "skipped",
+                                          "reason": "Already marked as unused"
+                                      })
+                                      continue
+                                  
+                                  # Get deployment creation time
+                                  try:
+                                      deployment = self.apps_v1.read_namespaced_deployment(
+                                          name="code-server",
+                                          namespace=namespace_name
+                                      )
+                                      
+                                      creation_timestamp = deployment.metadata.creation_timestamp
+                                      current_time = time.time()
+                                      deployment_age_hours = (current_time - creation_timestamp.timestamp()) / 3600
+                                      
+                                      logger.info(f"Workspace {workspace_id} age: {deployment_age_hours:.1f} hours")
+                                      
+                                      # Check health endpoint directly
+                                      if pod_ip:
+                                          last_hit_timestamp = self._get_last_hit_from_health_endpoint(pod_ip, workspace_id)
+                                          
+                                          should_mark_unused = False
+                                          reason = ""
+                                          
+                                          if last_hit_timestamp == 0:
+                                              if deployment_age_hours > max_idle_hours:
+                                                  should_mark_unused = True
+                                                  reason = f"No traffic received in {deployment_age_hours:.1f} hours since creation"
+                                              else:
+                                                  reason = f"No traffic yet, but workspace is only {deployment_age_hours:.1f} hours old"
+                                          else:
+                                              hours_since_last_hit = (current_time - last_hit_timestamp) / 3600
+                                              if hours_since_last_hit > max_idle_hours:
+                                                  should_mark_unused = True
+                                                  reason = f"No traffic for {hours_since_last_hit:.1f} hours (last hit: {datetime.fromtimestamp(last_hit_timestamp, timezone.utc).isoformat()})"
+                                              else:
+                                                  reason = f"Recent activity {hours_since_last_hit:.1f} hours ago"
+                                          
+                                          if should_mark_unused:
+                                              logger.info(f"Marking workspace {workspace_id} as unused: {reason}")
+                                              
+                                              # Mark as unused instead of deleting
+                                              self._mark_workspace_unused(namespace_name, reason)
+                                              
+                                              cleanup_results.append({
+                                                  "workspace_id": workspace_id,
+                                                  "namespace": namespace_name,
+                                                  "pool": pool_name,
+                                                  "action": "marked_unused",
+                                                  "reason": reason
+                                              })
+                                          else:
+                                              cleanup_results.append({
+                                                  "workspace_id": workspace_id,
+                                                  "namespace": namespace_name,
+                                                  "pool": pool_name,
+                                                  "action": "kept_active",
+                                                  "reason": reason
+                                              })
+                                      else:
+                                          logger.warning(f"No pod IP found for workspace {workspace_id}")
+                                          cleanup_results.append({
+                                              "workspace_id": workspace_id,
+                                              "namespace": namespace_name,
+                                              "pool": pool_name,
+                                              "action": "error",
+                                              "reason": "No pod IP available"
+                                          })
+                                  
+                                  except Exception as e:
+                                      logger.error(f"Error checking workspace {workspace_id}: {e}")
+                                      cleanup_results.append({
+                                          "workspace_id": workspace_id,
+                                          "namespace": namespace_name,
+                                          "pool": pool_name,
+                                          "action": "error",
+                                          "reason": str(e)
+                                      })
+                                      
+                              except Exception as e:
+                                  logger.error(f"Error processing namespace {ns.metadata.name}: {e}")
+                                  continue
+                                  
+                          return cleanup_results
+                          
+                      except Exception as e:
+                          logger.error(f"Error in cleanup_inactive_workspaces: {e}")
+                          raise Exception(f"Failed to cleanup workspaces: {str(e)}")
+                  
+                  def _get_last_hit_from_health_endpoint(self, pod_ip: str, workspace_id: str) -> int:
+                      """Get last hit timestamp directly from health endpoint"""
+                      try:
+                          health_url = f"http://{pod_ip}:15552/health"
+                          logger.info(f"Checking health endpoint for {workspace_id}: {health_url}")
+                          
+                          response = requests.get(health_url, timeout=10)
+                          response.raise_for_status()
+                          
+                          health_data = response.json()
+                          logger.info(f"Health response for {workspace_id}: {health_data}")
+                          
+                          if health_data.get('ok') and 'last_hit' in health_data:
+                              last_hit_iso = health_data['last_hit']
+                              logger.info(f"Last hit timestamp for {workspace_id}: {last_hit_iso}")
+                              
+                              # Convert ISO timestamp to epoch
+                              try:
+                                  # Parse ISO format like "2025-07-11T10:08:34.139Z"
+                                  last_hit_dt = datetime.fromisoformat(last_hit_iso.replace('Z', '+00:00'))
+                                  last_hit_epoch = int(last_hit_dt.timestamp())
+                                  logger.info(f"Converted to epoch for {workspace_id}: {last_hit_epoch}")
+                                  return last_hit_epoch
+                              except Exception as e:
+                                  logger.warning(f"Could not parse timestamp '{last_hit_iso}' for {workspace_id}: {e}")
+                                  return 0
+                          else:
+                              logger.warning(f"Invalid health response for {workspace_id}: {health_data}")
+                              return 0
+                              
+                      except requests.exceptions.RequestException as e:
+                          logger.warning(f"Could not reach health endpoint for {workspace_id}: {e}")
+                          return 0
+                      except Exception as e:
+                          logger.error(f"Error checking health endpoint for {workspace_id}: {e}")
+                          return 0
+                  
+                  def _get_workspace_usage_status(self, namespace_name: str) -> dict:
+                      """Get workspace usage status from ConfigMap"""
+                      try:
+                          config_map = self.core_v1.read_namespaced_config_map(
+                              name="workspace-usage",
+                              namespace=namespace_name
+                          )
+                          
+                          usage_data = json.loads(config_map.data.get("usage.json", "{}"))
+                          return usage_data
+                          
+                      except client.rest.ApiException as e:
+                          if e.status == 404:
+                              # No usage status ConfigMap means unused
+                              return {'status': 'unused'}
+                          raise
+                      except Exception as e:
+                          logger.error(f"Error getting workspace usage status: {e}")
+                          return {'status': 'unused'}
+                  
+                  def _mark_workspace_unused(self, namespace_name: str, reason: str):
+                      """Mark workspace as unused via ConfigMap"""
+                      try:
+                          usage_data = {
+                              'status': 'unused',
+                              'marked_at': datetime.now().isoformat(),
+                              'marked_by': 'cleanup-job',
+                              'reason': reason
+                          }
+                          
+                          config_map = client.V1ConfigMap(
+                              metadata=client.V1ObjectMeta(
+                                  name="workspace-usage",
+                                  namespace=namespace_name,
+                                  labels={"app": "workspace-usage"}
+                              ),
+                              data={
+                                  "usage.json": json.dumps(usage_data)
+                              }
+                          )
+                          
+                          try:
+                              # Try to update first
+                              self.core_v1.patch_namespaced_config_map(
+                                  name="workspace-usage",
+                                  namespace=namespace_name,
+                                  body=config_map
+                              )
+                              logger.info(f"Updated usage status for {namespace_name}")
+                          except client.rest.ApiException as e:
+                              if e.status == 404:
+                                  # Create if it doesn't exist
+                                  self.core_v1.create_namespaced_config_map(
+                                      namespace=namespace_name,
+                                      body=config_map
+                                  )
+                                  logger.info(f"Created usage status for {namespace_name}")
+                              else:
+                                  raise
+                                  
+                      except Exception as e:
+                          logger.error(f"Error marking workspace as unused: {e}")
+                          raise
+
+              def main():
+                  try:
+                      max_idle_hours = float(os.environ.get('MAX_IDLE_HOURS', '24'))
+                      
+                      logger.info(f"Starting cleanup for workspaces idle more than {max_idle_hours} hours")
+                      
+                      service = WorkspaceCleanupService()
+                      results = service.cleanup_inactive_workspaces(max_idle_hours)
+                      
+                      marked_unused_count = len([r for r in results if r.get('action') == 'marked_unused'])
+                      kept_active_count = len([r for r in results if r.get('action') == 'kept_active'])
+                      error_count = len([r for r in results if r.get('action') == 'error'])
+                      skipped_count = len([r for r in results if r.get('action') == 'skipped'])
+                      
+                      logger.info(f"Cleanup completed: {marked_unused_count} marked unused, {kept_active_count} kept active, {error_count} errors, {skipped_count} skipped")
+                      
+                      for result in results:
+                          action = result.get('action')
+                          workspace_id = result.get('workspace_id')
+                          pool = result.get('pool', 'no-pool')
+                          reason = result.get('reason')
+                          
+                          if action == 'marked_unused':
+                              logger.info(f"MARKED UNUSED: {workspace_id} (pool: {pool}) - {reason}")
+                          elif action == 'error':
+                              logger.error(f"ERROR: {workspace_id} (pool: {pool}) - {reason}")
+                          elif action == 'skipped':
+                              logger.info(f"SKIPPED: {workspace_id} (pool: {pool}) - {reason}")
+                          else:
+                              logger.debug(f"KEPT ACTIVE: {workspace_id} (pool: {pool}) - {reason}")
+                      
+                      return 0
+                      
+                  except Exception as e:
+                      logger.error(f"Cleanup job failed: {e}")
+                      return 1
+
+              if __name__ == "__main__":
+                  sys.exit(main())
+              EOF
+              
+              echo "Running cleanup..."
+              python /tmp/cleanup_job.py
+            env:
+            - name: MAX_IDLE_HOURS
+              value: "1"
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+              limits:
+                cpu: "500m"
+                memory: "512Mi"
+          restartPolicy: OnFailure
