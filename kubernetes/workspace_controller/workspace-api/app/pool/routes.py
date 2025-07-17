@@ -1,6 +1,6 @@
 import logging
 from flask import Blueprint, request, jsonify
-from app.auth.decorators import token_required
+from app.auth.decorators import token_required, admin_required
 from app.pool.service import pool_service
 from urllib.parse import unquote  # Add this import
 
@@ -13,7 +13,15 @@ pool_bp = Blueprint('pool', __name__)
 def list_pools(current_user):
     """List all pools"""
     try:
-        pools = pool_service.list_pools()
+        is_admin = current_user.get('role') == 'admin'
+        
+        if is_admin:
+            # Admin can see all pools
+            pools = pool_service.list_pools()
+        else:
+            # Regular user sees only their pools
+            pools = pool_service.get_user_pools(current_user['username'])
+
         return jsonify({"pools": pools})
     except Exception as e:
         logger.error(f"Error in list_pools: {e}")
@@ -29,6 +37,8 @@ def create_pool(current_user):
             return jsonify({"error": "Request body must be JSON"}), 400
         
         data = request.json
+        is_admin = current_user.get('role') == 'admin'
+        username = current_user['username']
         
         # Validate required fields
         required_fields = ['pool_name', 'minimum_vms', 'repo_name', 'branch_name', 'github_pat']
@@ -49,7 +59,10 @@ def create_pool(current_user):
             if not isinstance(env_var, dict) or 'name' not in env_var or 'value' not in env_var:
                 return jsonify({"error": "Each env_var must have 'name' and 'value' fields"}), 400
 
-        
+        owner_username = data.get('owner_username', username)
+        if owner_username != username and not is_admin:
+            return jsonify({"error": "Only admins can create pools for other users"}), 403
+
         result = pool_service.create_pool(
             pool_name=data['pool_name'],
             minimum_vms=data['minimum_vms'],
@@ -57,7 +70,8 @@ def create_pool(current_user):
             branch_name=data['branch_name'],
             github_pat=data['github_pat'],
             github_username=data['github_username'],
-            env_vars=env_vars
+            env_vars=env_vars,
+            owner_username=owner_username
         )
         
         return jsonify(result), 201
@@ -79,6 +93,9 @@ def update_pool(current_user, pool_name):
             return jsonify({"error": "Request body must be JSON"}), 400
         
         data = request.json
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+
         
         # Validate environment variables format if provided
         if 'env_vars' in data:
@@ -99,7 +116,8 @@ def update_pool(current_user, pool_name):
                 return jsonify({"error": "github_pat must be a string or object with 'value' field"}), 400
 
 
-        result = pool_service.update_pool(pool_name, data)
+        requesting_user = None if is_admin else username
+        result = pool_service.update_pool(pool_name, data, requesting_user=requesting_user)
         return jsonify(result)
         
     except ValueError as e:
@@ -116,7 +134,12 @@ def get_pool(current_user, pool_name):
     """Get details for a specific pool"""
     try:
         pool_name = unquote(pool_name)
-        pool_info = pool_service.get_pool(pool_name)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+
+        requesting_user = None if is_admin else username
+        pool_info = pool_service.get_pool(pool_name, requesting_user=requesting_user)
+
         return jsonify(pool_info)
     except ValueError as e:
         logger.warning(f"Pool not found: {e}")
@@ -132,7 +155,14 @@ def delete_pool(current_user, pool_name):
     """Delete a pool"""
     try:
         pool_name = unquote(pool_name)
-        result = pool_service.delete_pool(pool_name)
+
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        # Admin can delete any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        result = pool_service.delete_pool(pool_name, requesting_user=requesting_user)
+
         return jsonify(result)
     except ValueError as e:
         logger.warning(f"Pool not found: {e}")
@@ -152,6 +182,9 @@ def scale_pool(current_user, pool_name):
             return jsonify({"error": "Request body must be JSON"}), 400
         
         data = request.json
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+
         
         if 'minimum_vms' not in data:
             return jsonify({"error": "Missing required field: minimum_vms"}), 400
@@ -159,7 +192,8 @@ def scale_pool(current_user, pool_name):
         if not isinstance(data['minimum_vms'], int) or data['minimum_vms'] < 1:
             return jsonify({"error": "minimum_vms must be a positive integer"}), 400
         
-        result = pool_service.scale_pool(pool_name, data['minimum_vms'])
+        requesting_user = None if is_admin else username
+        result = pool_service.scale_pool(pool_name, data['minimum_vms'], requesting_user=requesting_user)
         return jsonify(result)
         
     except ValueError as e:
@@ -176,7 +210,12 @@ def get_available_workspace(current_user, pool_name):
     """Get an available workspace from the pool"""
     try:
         pool_name = unquote(pool_name)
-        workspace = pool_service.get_available_workspace(pool_name)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        # Admin can access any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        workspace = pool_service.get_available_workspace(pool_name, requesting_user=requesting_user)
         
         if workspace:
             return jsonify({
@@ -204,7 +243,12 @@ def get_pool_status(current_user, pool_name):
     """Get detailed status for a pool"""
     try:
         pool_name = unquote(pool_name)
-        pool_info = pool_service.get_pool(pool_name)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        # Admin can access any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        pool_info = pool_service.get_pool(pool_name, requesting_user=requesting_user)
         return jsonify(pool_info['status'])
     except ValueError as e:
         logger.warning(f"Pool not found: {e}")
@@ -220,7 +264,12 @@ def list_pool_workspaces(current_user, pool_name):
     """List all workspaces in a pool"""
     try:
         pool_name = unquote(pool_name)
-        pool_info = pool_service.get_pool(pool_name)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        # Admin can access any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        result = pool_service.get_pool_workspaces(pool_name, requesting_user=requesting_user)
         return jsonify({
             "pool_name": pool_name,
             "workspaces": pool_info['status']['workspaces']
@@ -239,9 +288,18 @@ def mark_workspace_used(current_user, pool_name, workspace_id):
     try:
         pool_name = unquote(pool_name)
         data = request.json or {}
-        user_info = data.get('user_info', current_user.get('username'))
         
-        result = pool_service.mark_workspace_as_used(pool_name, workspace_id, user_info)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        data = request.json or {}
+        user_info = data.get('user_info', username)
+        
+        # Admin can access any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        result = pool_service.mark_workspace_as_used(
+            pool_name, workspace_id, requesting_user=requesting_user, user_info=user_info
+        )
         return jsonify(result)
         
     except ValueError as e:
@@ -258,7 +316,14 @@ def mark_workspace_unused(current_user, pool_name, workspace_id):
     """Mark a workspace as unused"""
     try:
         pool_name = unquote(pool_name)
-        result = pool_service.mark_workspace_as_unused(pool_name, workspace_id)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        # Admin can access any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        result = pool_service.mark_workspace_as_unused(
+            pool_name, workspace_id, requesting_user=requesting_user
+        )
         return jsonify(result)
         
     except ValueError as e:
@@ -275,7 +340,14 @@ def get_workspace_usage(current_user, pool_name, workspace_id):
     """Get workspace usage status"""
     try:
         pool_name = unquote(pool_name)
-        result = pool_service.get_workspace_usage_status(pool_name, workspace_id)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        # Admin can access any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        result = pool_service.get_workspace_usage_status(
+            pool_name, workspace_id, requesting_user=requesting_user
+        )
         return jsonify(result)
         
     except ValueError as e:
@@ -292,7 +364,14 @@ def delete_pool_workspace(current_user, pool_name, workspace_id):
     try:
         pool_name = unquote(pool_name)
         
-        result = pool_service.delete_workspace_from_pool(pool_name, workspace_id)
+        username = current_user['username']
+        is_admin = current_user.get('role') == 'admin'
+        
+        # Admin can access any pool, regular users only their own
+        requesting_user = None if is_admin else username
+        result = pool_service.delete_workspace_from_pool(
+            pool_name, workspace_id, requesting_user=requesting_user
+        )
         return jsonify(result)
         
     except ValueError as e:
@@ -300,4 +379,38 @@ def delete_pool_workspace(current_user, pool_name, workspace_id):
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error(f"Error in delete_pool_workspace: {e}")
+        return jsonify({"error": str(e)}), 500
+    
+@pool_bp.route('/admin/all', methods=['GET'])
+@token_required
+@admin_required
+def list_all_pools_admin(current_user):
+    """List all pools in the system (admin only)"""
+    try:
+        pools = pool_service.list_pools()
+        return jsonify({
+            "pools": pools,
+            "total_count": len(pools),
+            "admin_view": True
+        })
+    except Exception as e:
+        logger.error(f"Error in list_all_pools_admin: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@pool_bp.route('/admin/users/<username>/pools', methods=['GET'])
+@token_required
+@admin_required
+def get_user_pools_admin(current_user, username):
+    """Get all pools owned by a specific user (admin only)"""
+    try:
+        pools = pool_service.get_user_pools(username)
+        return jsonify({
+            "username": username,
+            "pools": pools,
+            "pool_count": len(pools),
+            "admin_view": True
+        })
+    except Exception as e:
+        logger.error(f"Error in get_user_pools_admin: {e}")
         return jsonify({"error": str(e)}), 500

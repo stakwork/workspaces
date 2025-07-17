@@ -492,6 +492,21 @@ resource "aws_ecr_repository" "workspace_controller" {
   }
 }
 
+# Create an ECR repository for your workspace controller
+resource "aws_ecr_repository" "workspace_ui" {
+  force_delete = true
+  name                 = "workspace-ui"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "workspace-ui"
+  }
+}
+
 resource "aws_ecr_repository" "workspace_images" {
   force_delete = true
   name                 = "workspace-images"
@@ -509,6 +524,27 @@ resource "aws_ecr_repository" "workspace_images" {
 # Set up ECR lifecycle policy (optional but recommended)
 resource "aws_ecr_lifecycle_policy" "workspace_controller_lifecycle" {
   repository = aws_ecr_repository.workspace_controller.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1,
+        description  = "Keep last 10 images",
+        selection = {
+          tagStatus     = "any",
+          countType     = "imageCountMoreThan",
+          countNumber   = 10
+        },
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "workspace_ui_lifecycle" {
+  repository = aws_ecr_repository.workspace_ui.name
 
   policy = jsonencode({
     rules = [
@@ -557,6 +593,19 @@ resource "aws_iam_policy" "ecr_limited_access" {
           "ecr:CompleteLayerUpload"
         ]
         Resource = aws_ecr_repository.workspace_images.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload"
+        ]
+        Resource = aws_ecr_repository.workspace_ui.arn
       },
       {
         Effect = "Allow"
@@ -671,8 +720,38 @@ resource "aws_iam_role" "workspace_controller_role" {
   })
 }
 
+resource "aws_iam_role" "workspace_ui_role" {
+  name = "workspace-ui-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks.arn
+        }
+        Condition = {
+          StringLike = {
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub": "system:serviceaccount:*:workspace-ui"
+          },
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud": "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "workspace_controller_role_attachment" {
   role       = aws_iam_role.workspace_controller_role.name
+  policy_arn = aws_iam_policy.ecr_limited_access.arn
+}
+
+resource "aws_iam_role_policy_attachment" "workspace_ui_role_attachment" {
+  role       = aws_iam_role.workspace_ui_role.name
   policy_arn = aws_iam_policy.ecr_limited_access.arn
 }
 

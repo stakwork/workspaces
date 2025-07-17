@@ -13,8 +13,10 @@ def create_app():
     from app.auth.routes import auth_bp
     from app.workspace.routes import workspace_bp
     from app.pool.routes import pool_bp
+    from app.user.routes import user_bp
     
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    app.register_blueprint(user_bp, url_prefix='/api/users')
     app.register_blueprint(workspace_bp, url_prefix='/api/workspaces')
     app.register_blueprint(pool_bp, url_prefix='/api/pools')
     
