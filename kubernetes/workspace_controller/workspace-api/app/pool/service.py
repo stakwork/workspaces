@@ -9,6 +9,7 @@ from kubernetes import client
 from app.config import app_config
 from app.workspace.service import workspace_service
 from app.pool.models import PoolConfig, PoolStatus
+from app.user.service import user_service
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class PoolService:
     def __init__(self):
         self.core_v1 = app_config.core_v1
         self.pools: Dict[str, PoolConfig] = {}
+        self.pool_owners: Dict[str, str] = {}  # pool_name -> username
         self.monitoring_threads: Dict[str, threading.Thread] = {}
         self.stop_monitoring: Dict[str, threading.Event] = {}
         self.scaling_locks: Dict[str, threading.Lock] = {}
@@ -89,12 +91,15 @@ class PoolService:
     
     def create_pool(self, pool_name: str, minimum_vms: int, repo_name: str, 
                    branch_name: str, github_pat: str, github_username: str, 
-                   env_vars: List[Dict] = None) -> Dict:
+                   env_vars: List[Dict] = None, owner_username: str = None) -> Dict:
         """Create a new pool"""
         try:
             # Validate inputs
             if pool_name in self.pools:
                 raise ValueError(f"Pool '{pool_name}' already exists")
+            
+            if not owner_username:
+                raise ValueError("Owner username is required")
             
             if minimum_vms < 1:
                 raise ValueError("minimum_vms must be at least 1")
@@ -129,10 +134,11 @@ class PoolService:
             )
             
             # Store pool configuration in Kubernetes
-            self._store_pool_config(pool_config)
+            self._store_pool_config(pool_config, owner_username)
             
             # Add to local cache
             self.pools[pool_name] = pool_config
+            self.pool_owners[pool_name] = owner_username
             
             # Create scaling lock for this pool
             self.scaling_locks[pool_name] = threading.Lock()
@@ -144,23 +150,59 @@ class PoolService:
             with self.scaling_locks[pool_name]:
                 self._scale_pool(pool_name)
             
-            logger.info(f"Created pool '{pool_name}' with {minimum_vms} minimum VMs")
+            user_service.add_pool_to_user(owner_username, pool_name)
+
+            logger.info(f"Created pool '{pool_name}' with {minimum_vms} minimum VMs for user '{owner_username}'")
             
             return {
                 "success": True,
                 "message": f"Pool '{pool_name}' created successfully",
-                "pool": pool_config.to_dict(mask_sensitive=True)
+                "pool": pool_config.to_dict(mask_sensitive=True),
+                "owner": owner_username
             }
             
         except Exception as e:
             logger.error(f"Error creating pool '{pool_name}': {e}")
             raise Exception(f"Failed to create pool: {str(e)}")
+    
+    def get_user_pools(self, username: str) -> List[Dict]:
+        """Get all pools owned by a specific user"""
+        user_pools = []
         
-    def update_pool(self, pool_name: str, update_data: Dict) -> Dict:
+        for pool_name, pool_config in self.pools.items():
+            if self.pool_owners.get(pool_name) == username:
+                try:
+                    status = self._get_pool_status(pool_name)
+                    status_dict = status.to_dict()
+                    # Add masked config info to status
+                    status_dict['config'] = pool_config.to_dict(mask_sensitive=True)
+                    status_dict['owner'] = username
+                    user_pools.append(status_dict)
+                except Exception as e:
+                    logger.error(f"Error getting status for pool '{pool_name}': {e}")
+                    user_pools.append({
+                        'pool_name': pool_name,
+                        'error': str(e),
+                        'minimum_vms': pool_config.minimum_vms,
+                        'config': pool_config.to_dict(mask_sensitive=True),
+                        'owner': username
+                    })
+        
+        return user_pools
+    
+    def check_pool_ownership(self, pool_name: str, username: str) -> bool:
+        """Check if a user owns a specific pool"""
+        return self.pool_owners.get(pool_name) == username
+    
+    def update_pool(self, pool_name: str, update_data: Dict, requesting_user: str = None) -> Dict:
         """Update pool configuration"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
         
+        # Check ownership
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
+
         try:
             pool_config = self.pools[pool_name]
             
@@ -239,14 +281,16 @@ class PoolService:
                 pool_config.env_vars = new_env_vars
             
             # Update stored configuration
-            self._store_pool_config(pool_config)
+            owner_username = self.pool_owners.get(pool_name)
+            self._store_pool_config(pool_config, owner_username)
             
             logger.info(f"Updated pool '{pool_name}' configuration")
             
             return {
                 "success": True,
                 "message": f"Pool '{pool_name}' updated successfully",
-                "pool": pool_config.to_dict(mask_sensitive=True)  # Always mask in responses
+                "pool": pool_config.to_dict(mask_sensitive=True),
+                "owner": owner_username
             }
             
         except Exception as e:
@@ -263,6 +307,8 @@ class PoolService:
                 status_dict = status.to_dict()
                 # Add masked config info to status
                 status_dict['config'] = pool_config.to_dict(mask_sensitive=True)
+                status_dict['owner'] = self.pool_owners.get(pool_name, 'admin')
+
                 pools_status.append(status_dict)
             except Exception as e:
                 logger.error(f"Error getting status for pool '{pool_name}': {e}")
@@ -275,29 +321,40 @@ class PoolService:
         
         return pools_status
     
-    def get_pool(self, pool_name: str) -> Dict:
+    def get_pool(self, pool_name: str, requesting_user: str = None) -> Dict:
         """Get detailed information about a pool"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
         
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
+
         try:
             pool_config = self.pools[pool_name]
             status = self._get_pool_status(pool_name)
+            owner_username = self.pool_owners.get(pool_name)
             
             return {
-                "config": pool_config.to_dict(mask_sensitive=True),  # Always mask sensitive data
-                "status": status.to_dict()
+                "config": pool_config.to_dict(mask_sensitive=True),
+                "status": status.to_dict(),
+                "owner": owner_username
             }
         except Exception as e:
             logger.error(f"Error getting pool '{pool_name}': {e}")
             raise Exception(f"Failed to get pool: {str(e)}")
     
-    def delete_pool(self, pool_name: str) -> Dict:
+    def delete_pool(self, pool_name: str, requesting_user: str = None) -> Dict:
         """Delete a pool and all its workspaces"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
         
+        # Check ownership
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
+        
         try:
+            owner_username = self.pool_owners.get(pool_name)
+
             # Stop monitoring
             self._stop_pool_monitoring(pool_name)
             
@@ -315,27 +372,38 @@ class PoolService:
             
             # Remove from local cache
             del self.pools[pool_name]
-            
+            if pool_name in self.pool_owners:
+                del self.pool_owners[pool_name]
+
             # Remove scaling lock
             if pool_name in self.scaling_locks:
                 del self.scaling_locks[pool_name]
-            
+
+            if owner_username:
+                user_service.remove_pool_from_user(owner_username, pool_name)
+
             logger.info(f"Deleted pool '{pool_name}'")
             
             return {
                 "success": True,
-                "message": f"Pool '{pool_name}' deleted successfully"
+                "message": f"Pool '{pool_name}' deleted successfully",
+                "owner": owner_username
             }
             
         except Exception as e:
             logger.error(f"Error deleting pool '{pool_name}': {e}")
             raise Exception(f"Failed to delete pool: {str(e)}")
     
-    def scale_pool(self, pool_name: str, new_minimum: int) -> Dict:
+    def scale_pool(self, pool_name: str, new_minimum: int, requesting_user: str = None) -> Dict:
         """Update the minimum VMs for a pool"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
         
+        # Check ownership
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
+
+
         if new_minimum < 1:
             raise ValueError("minimum_vms must be at least 1")
         
@@ -348,7 +416,8 @@ class PoolService:
                 pool_config.minimum_vms = new_minimum
                 
                 # Update stored configuration
-                self._store_pool_config(pool_config)
+                owner_username = self.pool_owners.get(pool_name)
+                self._store_pool_config(pool_config, owner_username)
                 
                 # Trigger scaling
                 self._scale_pool(pool_name)
@@ -359,17 +428,22 @@ class PoolService:
                     "success": True,
                     "message": f"Pool '{pool_name}' scaled to {new_minimum} minimum VMs",
                     "old_minimum": old_minimum,
-                    "new_minimum": new_minimum
+                    "new_minimum": new_minimum,
+                    "owner": owner_username
                 }
             
         except Exception as e:
             logger.error(f"Error scaling pool '{pool_name}': {e}")
             raise Exception(f"Failed to scale pool: {str(e)}")
     
-    def get_available_workspace(self, pool_name: str) -> Optional[Dict]:
+    def get_available_workspace(self, pool_name: str, requesting_user: str = None) -> Optional[Dict]:
         """Get an available workspace from the pool"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
+        
+        # Check ownership
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
         
         try:
             workspaces = self._get_pool_workspaces(pool_name)
@@ -406,10 +480,14 @@ class PoolService:
             return None
 
     
-    def mark_workspace_as_used(self, pool_name: str, workspace_id: str, user_info: Optional[str] = None) -> Dict:
+    def mark_workspace_as_used(self, pool_name: str, workspace_id: str, requesting_user: str = None, user_info: Optional[str] = None) -> Dict:
         """Mark a workspace as used"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
+        
+        # Check ownership
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
         
         try:
             # Find the workspace namespace
@@ -438,6 +516,7 @@ class PoolService:
                 "message": f"Workspace '{workspace_id}' marked as used",
                 "workspace_id": workspace_id,
                 "pool_name": pool_name,
+                "pool_owner": self.pool_owners.get(pool_name),
                 "usage_status": "used",
                 "user_info": user_info,
                 "url": workspace_info['url']
@@ -447,11 +526,14 @@ class PoolService:
             logger.error(f"Error marking workspace '{workspace_id}' as used: {e}")
             raise Exception(f"Failed to mark workspace as used: {str(e)}")
     
-    def mark_workspace_as_unused(self, pool_name: str, workspace_id: str) -> Dict:
+    def mark_workspace_as_unused(self, pool_name: str, workspace_id: str, requesting_user: str = None) -> Dict:
         """Mark a workspace as unused"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
         
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
+
         try:
             # Find the workspace namespace
             namespace_name = f"workspace-{workspace_id}"
@@ -477,6 +559,7 @@ class PoolService:
                 "message": f"Workspace '{workspace_id}' marked as unused",
                 "workspace_id": workspace_id,
                 "pool_name": pool_name,
+                "pool_owner": self.pool_owners.get(pool_name),
                 "usage_status": "unused"
             }
             
@@ -484,10 +567,14 @@ class PoolService:
             logger.error(f"Error marking workspace '{workspace_id}' as unused: {e}")
             raise Exception(f"Failed to mark workspace as unused: {str(e)}")
     
-    def get_workspace_usage_status(self, pool_name: str, workspace_id: str) -> Dict:
+    def get_workspace_usage_status(self, pool_name: str, workspace_id: str, requesting_user: str = None) -> Dict:
         """Get the usage status of a workspace"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
+        
+        # Check ownership
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
         
         try:
             # Find the workspace namespace
@@ -500,6 +587,7 @@ class PoolService:
                 "success": True,
                 "workspace_id": workspace_id,
                 "pool_name": pool_name,
+                "pool_owner": self.pool_owners.get(pool_name),
                 "usage_status": usage_info.get('status', 'unused'),
                 "user_info": usage_info.get('user_info'),
                 "marked_at": usage_info.get('marked_at')
@@ -599,12 +687,15 @@ class PoolService:
                         env_vars=pool_data['env_vars'],
                         created_at=datetime.fromisoformat(pool_data['created_at'])
                     )
+
+                    owner_username = cm.metadata.labels.get('owner', 'unknown')
                     
                     self.pools[pool_config.pool_name] = pool_config
+                    self.pool_owners[pool_config.pool_name] = owner_username
                     self.scaling_locks[pool_config.pool_name] = threading.Lock()
                     self._start_pool_monitoring(pool_config.pool_name)
                     
-                    logger.info(f"Loaded existing pool: {pool_config.pool_name}")
+                    logger.info(f"Loaded existing pool: {pool_config.pool_name} (owner: {owner_username})")
                     
                 except Exception as e:
                     logger.error(f"Error loading pool from ConfigMap {cm.metadata.name}: {e}")
@@ -612,7 +703,7 @@ class PoolService:
         except Exception as e:
             logger.error(f"Error loading existing pools: {e}")
     
-    def _store_pool_config(self, pool_config: PoolConfig):
+    def _store_pool_config(self, pool_config: PoolConfig, owner_username: str = None):
         """Store pool configuration in Kubernetes"""
         config_data = {
             'pool_name': pool_config.pool_name,
@@ -629,15 +720,20 @@ class PoolService:
         sanitized_pool_name = sanitize_k8s_name(pool_config.pool_name)
         sanitized_pool_label = sanitize_k8s_label(pool_config.pool_name)
         
+        labels = {
+            "app": "workspace-pool", 
+            "pool": sanitized_pool_label,
+            "original-pool-name": sanitized_pool_label  # Keep track of original name
+        }
+
+        if owner_username:
+            labels["owner"] = sanitize_k8s_label(owner_username)
+
         config_map = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(
                 name=f"pool-{sanitized_pool_name}",
                 namespace="workspace-system",
-                labels={
-                    "app": "workspace-pool", 
-                    "pool": sanitized_pool_label,
-                    "original-pool-name": sanitized_pool_label  # Keep track of original name
-                }
+                labels=labels
             ),
             data={
                 "pool.json": json.dumps(config_data)
@@ -1049,17 +1145,21 @@ class PoolService:
         except Exception as e:
             logger.error(f"Error cleaning up unhealthy workspaces in pool {pool_name}: {e}")
 
-    def get_pool_workspaces(self, pool_name: str) -> Dict:
+    def get_pool_workspaces(self, pool_name: str, requesting_user: str = None) -> Dict:
         """Get all workspaces in a pool"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
-        
+
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
+
         try:
             workspaces = self._get_pool_workspaces(pool_name)
             
             return {
                 "success": True,
                 "pool_name": pool_name,
+                "pool_owner": self.pool_owners.get(pool_name),
                 "workspaces": workspaces,
                 "total_count": len(workspaces)
             }
@@ -1068,11 +1168,14 @@ class PoolService:
             logger.error(f"Error getting workspaces for pool '{pool_name}': {e}")
             raise Exception(f"Failed to get pool workspaces: {str(e)}")
 
-    def delete_workspace_from_pool(self, pool_name: str, workspace_id: str) -> Dict:
+    def delete_workspace_from_pool(self, pool_name: str, workspace_id: str, requesting_user: str = None) -> Dict:
         """Delete a specific workspace from a pool"""
         if pool_name not in self.pools:
             raise ValueError(f"Pool '{pool_name}' not found")
         
+        if requesting_user and not self.check_pool_ownership(pool_name, requesting_user):
+            raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
+
         try:
             # Find the workspace namespace
             namespace_name = f"workspace-{workspace_id}"
@@ -1113,7 +1216,8 @@ class PoolService:
                 "success": True,
                 "message": f"Workspace '{workspace_id}' deleted from pool '{pool_name}'",
                 "workspace_id": workspace_id,
-                "pool_name": pool_name
+                "pool_name": pool_name,
+                "pool_owner": self.pool_owners.get(pool_name)
             }
             
         except ValueError as ve:

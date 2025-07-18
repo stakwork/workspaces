@@ -27,7 +27,15 @@ envsubst < ../k8s/deployment.yaml > ../k8s/deployment-generated.yaml
 
 echo "🚀 Applying deployment to cluster..."
 kubectl apply -f ../k8s/deployment-generated.yaml
-kubectl apply -f ../../base/apps/workspace-ui.yaml
+
+cd ../frontend
+
+docker buildx build --platform linux/amd64 --push \
+  -t $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/workspace-ui:$TAG \
+  -t $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/workspace-ui:latest .
+
+envsubst < ../../base/apps/workspace-ui.yaml > ../../base/apps/workspace-ui-generated.yaml
+kubectl apply -f ../../base/apps/workspace-ui-generated.yaml
 
 echo "⏳ Waiting for rollout to complete..."
 kubectl rollout status deployment/workspace-controller -n workspace-system

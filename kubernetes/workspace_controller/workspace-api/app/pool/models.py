@@ -15,6 +15,7 @@ class PoolConfig:
     github_username: Optional[str] = None
     env_vars: List[Dict] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
+    owner_username: Optional[str] = None
 
     def _mask_value(self, value: str) -> str:
         """Mask sensitive value showing only first 2 and last 2 characters"""
@@ -61,7 +62,8 @@ class PoolConfig:
             'github_pat': github_pat_output,
             'github_username': self.github_username,
             'env_vars': env_vars_output,
-            'created_at': self.created_at.isoformat()
+            'created_at': self.created_at.isoformat(),
+            'owner_username': self.owner_username
         }
     
     def to_json(self, mask_sensitive=True):
