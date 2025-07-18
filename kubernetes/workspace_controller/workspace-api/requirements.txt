@@ -7,3 +7,4 @@ randomname==0.1.5
 werkzeug==2.2.2
 PyJWT
 bcrypt
+requests

@@ -10,9 +10,13 @@ from app.config import app_config
 from app.workspace.service import workspace_service
 from app.pool.models import PoolConfig, PoolStatus
 from app.user.service import user_service
+import requests
+from urllib3.exceptions import InsecureRequestWarning
+import urllib3
 
 logger = logging.getLogger(__name__)
 
+urllib3.disable_warnings(InsecureRequestWarning)
 
 def sanitize_k8s_name(name: str) -> str:
     """
@@ -823,7 +827,7 @@ class PoolService:
             return []
 
     def _determine_pod_state(self, pod) -> str:
-        """Determine the actual state of a pod, including crash detection"""
+        """Determine the actual state of a pod, including crash detection and health checks"""
         
         # Check if pod is explicitly failed
         if pod.status.phase in ["Failed", "Unknown"]:
@@ -874,6 +878,13 @@ class PoolService:
                 all_ready = all(cs.ready for cs in pod.status.container_statuses)
                 if not all_ready:
                     return "starting"
+            
+            # Perform HTTP health check before considering it truly "running"
+            namespace_name = pod.metadata.namespace
+            if not self._check_http_health(namespace_name, pod):
+                logger.info(f"Pod {pod.metadata.name} in {namespace_name} is running but failed health check")
+                return "starting"  # Pod is running but services aren't ready yet
+            
             return "running"
         elif pod.status.phase == "Pending":
             return "pending"
@@ -916,30 +927,85 @@ class PoolService:
                                 return False
         
         # Optional: HTTP health check if your code-server exposes health endpoint
-        # return self._check_http_health(namespace_name)
+        if not self._check_http_health(namespace_name, pod):
+            logger.info(f"HTTP health check failed for {namespace_name}")
+            return False
         
+        logger.info(f"Workspace {namespace_name} passed all health checks")
         return True
 
-    def _check_http_health(self, namespace_name: str) -> bool:
-        """Optional: Perform HTTP health check on the code-server"""
+    def _check_http_health(self, namespace_name: str, pod) -> bool:
+        """Perform HTTP health check on the code-server by calling /jlist endpoint"""
         try:
-            # Get service endpoint
-            services = self.core_v1.list_namespaced_service(
-                namespace_name,
-                label_selector="app=code-server"
+            pod_ip = pod.status.pod_ip
+
+            # Using cluster-internal DNS: service-name.namespace.svc.cluster.local
+            health_url = f"http://{pod_ip}:15552/jlist"
+            
+            # Make the HTTP request with a reasonable timeout
+            logger.info(f"Checking health for {namespace_name} at {health_url}")
+            
+            response = requests.get(
+                health_url,
+                timeout=10,  # 10 second timeout
+                verify=False  # Skip SSL verification for internal cluster communication
             )
             
-            if not services.items:
+            if response.status_code != 200:
+                logger.info(f"Health check failed for {namespace_name}: HTTP {response.status_code}")
                 return False
             
-            # Perform health check (implement based on your setup)
-            # This would require additional networking setup to reach the pod
-            # from within the cluster
+            # Parse the JSON response
+            try:
+                processes = response.json()
+            except ValueError as e:
+                logger.error(f"Invalid JSON response from health check for {namespace_name}: {e}")
+                return False
             
-            return True
-        except Exception as e:
-            logger.error(f"HTTP health check failed for {namespace_name}: {e}")
+            # Check that we have a list of processes
+            if not isinstance(processes, list):
+                logger.error(f"Health check response is not a list for {namespace_name}")
+                return False
+            
+            # Check that all processes are online
+            online_processes = 0
+            total_processes = len(processes)
+            
+            for process in processes:
+                if not isinstance(process, dict):
+                    continue
+                    
+                pm2_env = process.get('pm2_env', {})
+                status = pm2_env.get('status', '')
+                process_name = process.get('name', 'unknown')
+                
+                if status == 'online':
+                    online_processes += 1
+                    logger.info(f"Process {process_name} is online in {namespace_name}")
+                else:
+                    logger.info(f"Process {process_name} is {status} in {namespace_name}")
+            
+            # All processes must be online for the workspace to be healthy
+            if online_processes == total_processes and total_processes > 0:
+                logger.info(f"Health check passed for {namespace_name}: {online_processes}/{total_processes} processes online")
+                return True
+            else:
+                logger.info(f"Health check failed for {namespace_name}: {online_processes}/{total_processes} processes online")
+                return False
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"Health check timed out for {namespace_name}")
             return False
+        except requests.exceptions.ConnectionError:
+            logger.error(f"Health check connection failed for {namespace_name} (service may not be ready)")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Health check request failed for {namespace_name}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error in health check for {namespace_name}: {e}")
+            return False
+
 
     
     def _get_pool_status(self, pool_name: str) -> PoolStatus:
@@ -952,7 +1018,7 @@ class PoolService:
         
         # Count workspaces by state and usage
         running_vms = len([w for w in workspaces if w.get('state') == 'running'])
-        pending_vms = len([w for w in workspaces if w.get('state') in ['pending', 'creating']])
+        pending_vms = len([w for w in workspaces if w.get('state') in ['pending', 'creating', 'starting']])
         failed_vms = len([w for w in workspaces if w.get('state') in ['failed', 'error']])
         used_vms = len([w for w in workspaces if w.get('usage_status') == 'used' and w.get('state') == 'running'])
         unused_vms = len([w for w in workspaces if w.get('usage_status') != 'used' and w.get('state') == 'running'])
