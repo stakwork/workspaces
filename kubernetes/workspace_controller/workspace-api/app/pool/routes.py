@@ -272,7 +272,7 @@ def list_pool_workspaces(current_user, pool_name):
         result = pool_service.get_pool_workspaces(pool_name, requesting_user=requesting_user)
         return jsonify({
             "pool_name": pool_name,
-            "workspaces": pool_info['status']['workspaces']
+            "workspaces": result['workspaces']
         })
     except ValueError as e:
         logger.warning(f"Pool not found: {e}")
