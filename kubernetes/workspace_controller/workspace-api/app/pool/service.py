@@ -975,8 +975,7 @@ class PoolService:
                 if not isinstance(process, dict):
                     continue
                     
-                pm2_env = process.get('pm2_env', {})
-                status = pm2_env.get('status', '')
+                status = process.get('status', '')
                 process_name = process.get('name', 'unknown')
                 
                 if status == 'online':
