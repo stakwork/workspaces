@@ -101,31 +101,31 @@ def create_init_script_configmap(workspace_ids, workspace_config):
     init_script += f"""
 # Create docker-compose startup script
 echo "Creating docker-compose startup script"
-cat > /workspaces/start-docker-compose.sh << 'EOL'
+cat > /workspaces/.pod-config/start-docker-compose.sh << 'EOL'
 {helper_scripts['docker_compose_script']}
 EOL
-chmod +x /workspaces/start-docker-compose.sh
+chmod +x /workspaces/.pod-config/start-docker-compose.sh
 
 # Create extension installation script
 echo "Creating extension installation script"
-cat > /workspaces/install-extensions.sh << 'EOL'
+cat > /workspaces/.pod-config/install-extensions.sh << 'EOL'
 {helper_scripts['extension_install_script']}
 EOL
-chmod +x /workspaces/install-extensions.sh
+chmod +x /workspaces/.pod-config/install-extensions.sh
 
 # Create environment setup script
 echo "Creating environment setup script"
-cat > /workspaces/setup-env.sh << 'EOL'
+cat > /workspaces/.pod-config/setup-env.sh << 'EOL'
 {helper_scripts['env_setup_script']}
 EOL
-chmod +x /workspaces/setup-env.sh
+chmod +x /workspaces/.pod-config/setup-env.sh
 
 # Create lifecycle script
 echo "Creating lifecycle script"
-cat > /workspaces/run-lifecycle.sh << 'EOL'
+cat > /workspaces/.pod-config/run-lifecycle.sh << 'EOL'
 {helper_scripts['lifecycle_script']}
 EOL
-chmod +x /workspaces/run-lifecycle.sh
+chmod +x /workspaces/.pod-config/run-lifecycle.sh
     """
     
     init_config_map = client.V1ConfigMap(
@@ -474,7 +474,7 @@ def _create_base_image_kaniko_container(workspace_ids):
         name="build-base-image",
         image="gcr.io/kaniko-project/executor:latest",
         args=[
-            "--dockerfile=/workspace/Dockerfile",
+            "--dockerfile=/workspace/.pod-config/Dockerfile",
             "--context=/workspace",
             f"--destination={app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",
@@ -491,7 +491,7 @@ def _create_base_image_kaniko_container(workspace_ids):
             client.V1VolumeMount(
                 name="workspace-data",
                 mount_path="/workspace",
-                sub_path="workspaces/.user-dockerfile"  # Path to the user's Dockerfile
+                sub_path="workspaces/.pod-config/.user-dockerfile"  # Path to the user's Dockerfile
             )
         ]
     )
@@ -503,7 +503,7 @@ def _create_wrapper_kaniko_container(workspace_ids):
         name="build-wrapper-image",
         image="gcr.io/kaniko-project/executor:latest",
         args=[
-            "--dockerfile=/workspace/Dockerfile",
+            "--dockerfile=/workspace/.pod-config/Dockerfile",
             "--context=/workspace",
             f"--destination={app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",
@@ -520,7 +520,7 @@ def _create_wrapper_kaniko_container(workspace_ids):
             client.V1VolumeMount(
                 name="workspace-data",
                 mount_path="/workspace",
-                sub_path="workspaces/.code-server-wrapper"
+                sub_path="workspaces/.pod-config/.code-server-wrapper"
             )
         ]
     )
