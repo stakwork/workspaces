@@ -63,6 +63,8 @@ def create_pool(current_user):
         if owner_username != username and not is_admin:
             return jsonify({"error": "Only admins can create pools for other users"}), 403
 
+        container_files = data.get('container_files', {})
+
         result = pool_service.create_pool(
             pool_name=data['pool_name'],
             minimum_vms=data['minimum_vms'],
@@ -71,7 +73,11 @@ def create_pool(current_user):
             github_pat=data['github_pat'],
             github_username=data['github_username'],
             env_vars=env_vars,
-            owner_username=owner_username
+            owner_username=owner_username,
+            devcontainer_json=container_files.get('devcontainer.json'),
+            dockerfile=container_files.get('Dockerfile'),
+            docker_compose_yml=container_files.get('docker-compose.yml'),
+            pm2_config_js=container_files.get('pm2.config.js')
         )
         
         return jsonify(result), 201

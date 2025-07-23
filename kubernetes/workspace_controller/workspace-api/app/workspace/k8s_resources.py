@@ -474,7 +474,7 @@ def _create_base_image_kaniko_container(workspace_ids):
         name="build-base-image",
         image="gcr.io/kaniko-project/executor:latest",
         args=[
-            "--dockerfile=/workspace/.pod-config/Dockerfile",
+            "--dockerfile=/workspace/Dockerfile",
             "--context=/workspace",
             f"--destination={app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",
@@ -503,7 +503,7 @@ def _create_wrapper_kaniko_container(workspace_ids):
         name="build-wrapper-image",
         image="gcr.io/kaniko-project/executor:latest",
         args=[
-            "--dockerfile=/workspace/.pod-config/Dockerfile",
+            "--dockerfile=/workspace/Dockerfile",
             "--context=/workspace",
             f"--destination={app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
             "--insecure",

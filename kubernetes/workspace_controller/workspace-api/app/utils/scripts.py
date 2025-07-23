@@ -424,17 +424,62 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
     
     # Add devcontainer processing
     repo_name = workspace_config['repo_name']
+    container_files = workspace_config['container_files']
+
+    devcontainer_b64 = container_files['devcontainer_json'] if container_files and container_files['devcontainer_json'] else ''
+    dockerfile_b64 = container_files['dockerfile'] if container_files and container_files['dockerfile'] else ''
+    docker_compose_b64 = container_files['docker_compose_yml'] if container_files and container_files['docker_compose_yml'] else ''
+    pm2_config_b64 = container_files['pm2_config_js'] if container_files and container_files['pm2_config_js'] else ''
     
     init_script += f"""
     # Create directory for wrapper Dockerfile and user Dockerfile
     mkdir -p /workspaces/.pod-config/.code-server-wrapper
     mkdir -p /workspaces/.pod-config/.user-dockerfile
+    
     cd /workspaces/.pod-config/.code-server-wrapper
     
     # Locate the user's Dockerfile in their repo
     USER_REPO_PATH="/workspaces/{repo_name}"
+
+    mkdir -p $USER_REPO_PATH/.devcontainer/
+
     DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
     DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
+    DOCKER_COMPOSE_PATH="$USER_REPO_PATH/.devcontainer/docker-compose.yml"
+    PM2_CONFIG_PATH="$USER_REPO_PATH/.devcontainer/pm2.config.js"
+
+    # Function to create file from base64 if it doesn't exist in repo
+    create_from_pool_config() {{
+        local file_path="$1"
+        local base64_content="$2"
+        local filename="$3"
+        
+        if [ ! -f "$file_path" ] && [ ! -z "$base64_content" ] && [ "$base64_content" != "None" ] && [ "$base64_content" != "null" ]; then
+            echo "Creating $filename from pool configuration..."
+            mkdir -p "$(dirname "$file_path")"
+            echo "$base64_content" | base64 -d > "$file_path"
+            if [ $? -eq 0 ]; then
+                echo "Successfully created $filename from pool config"
+            else
+                echo "Failed to decode base64 content for $filename"
+            fi
+        else
+            echo "Skipping $filename - file exists or no pool config provided"
+        fi
+        return 0
+    }}
+
+    # Check and create devcontainer.json from pool config if needed
+    create_from_pool_config "$DEVCONTAINER_JSON_PATH" "{devcontainer_b64}" "devcontainer.json"
+    
+    # Check and create Dockerfile from pool config if needed  
+    create_from_pool_config "$DOCKERFILE_PATH" "{dockerfile_b64}" "Dockerfile"
+    
+    # Check and create docker-compose.yml from pool config if needed
+    create_from_pool_config "$DOCKER_COMPOSE_PATH" "{docker_compose_b64}" "docker-compose.yml"
+    
+    # Check and create pm2.config.js from pool config if needed
+    create_from_pool_config "$PM2_CONFIG_PATH" "{pm2_config_b64}" "pm2.config.js"    
     
     # Debug info
     echo "DEBUG: Checking repository and Dockerfile"
@@ -724,6 +769,10 @@ COMPOSE_FILE_FULL_PATH=""
 # Check in .devcontainer directory first
 if [ -f ".devcontainer/$DOCKER_COMPOSE_FILE" ]; then
     COMPOSE_FILE_FULL_PATH=".devcontainer/$DOCKER_COMPOSE_FILE"
+    cd /workspaces
+elif [ -f "/workspaces/.pod-config/.user-dockerfile/docker-compose.yml" ]; then
+    # Check if docker-compose was created from pool config
+    COMPOSE_FILE_FULL_PATH="/workspaces/.pod-config/.user-dockerfile/docker-compose.yml"
     cd /workspaces
 elif [ -f "$DOCKER_COMPOSE_FILE" ]; then
     COMPOSE_FILE_FULL_PATH="$DOCKER_COMPOSE_FILE"
