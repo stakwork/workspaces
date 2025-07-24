@@ -9,7 +9,7 @@ def create_post_start_command():
             
             # Run the entire setup in background
             nohup bash -c '
-                exec > /workspaces/poststart.log 2>&1
+                exec > /workspaces/.pod-config/poststart.log 2>&1
                 echo "Starting post-start initialization at $(date)"
                 echo "RUNNING" > /workspaces/setup-status
 
@@ -53,9 +53,9 @@ def create_post_start_command():
                 sleep 10
 
                 # Check and install any extensions from devcontainer.json if not already installed
-                if [ -f /workspaces/install-extensions.sh ] && [ -f /workspaces/.extensions-list ]; then
+                if [ -f /workspaces/.pod-config/install-extensions.sh ] && [ -f /workspaces/.pod-config/.extensions-list ]; then
                     echo "Running extension installation script again to ensure all extensions are installed"
-                    /workspaces/install-extensions.sh
+                    /workspaces/.pod-config/install-extensions.sh
                 fi
 
                 echo "Installing Docker for $OS $VERSION_CODENAME"
@@ -210,26 +210,26 @@ def create_post_start_command():
                 fi
                 
                 # Run start-docker-compose command if it exists
-                if [ -f "/workspaces/start-docker-compose.sh" ]; then
+                if [ -f "/workspaces/.pod-config/start-docker-compose.sh" ]; then
                     echo "Running docker-compose..."
-                    /workspaces/start-docker-compose.sh
+                    /workspaces/.pod-config/start-docker-compose.sh
                 fi
 
                 cd /workspaces
 
                 # Run post-create command if it exists
-                if [ -f "/workspaces/post-create-command.sh" ]; then
+                if [ -f "/workspaces/.pod-config/post-create-command.sh" ]; then
                     echo "Running postCreateCommand..."
-                    /workspaces/post-create-command.sh
+                    /workspaces/.pod-config/post-create-command.sh
                 fi
 
                 echo "Post-start initialization completed at $(date)"
                 echo "COMPLETE" > /workspaces/setup-status
                 
-            ' > /workspaces/background-setup.log 2>&1 &
+            ' > /workspaces/.pod-config/background-setup.log 2>&1 &
             
             echo "Background setup started. Check /workspaces/setup-status for progress."
-            echo "Logs available at: /workspaces/poststart.log and /workspaces/background-setup.log"
+            echo "Logs available at: /workspaces/.pod-config/poststart.log and /workspaces/.pod-config/background-setup.log"
         """
     ]
 
@@ -244,7 +244,7 @@ def generate_init_script(workspace_ids, workspace_config):
       git config --global --add safe.directory '*'
       
       # Ensure the workspace directory exists
-      mkdir -p /workspaces
+      mkdir -p /workspaces/.pod-config/
 
       # Change to the workspace directory
       cd /workspaces
@@ -321,8 +321,8 @@ def generate_custom_image_script(workspace_ids, workspace_config):
     """Generate script for custom image handling"""
     return f"""
         # Create directory for custom image
-        mkdir -p /workspaces/.custom-image
-        cd /workspaces/.custom-image
+        mkdir -p /workspaces/.pod-config/.custom-image
+        cd /workspaces/.pod-config/.custom-image
         
         # Download custom image configuration
         echo "Downloading custom image configuration from {workspace_config['custom_image_url']}..."
@@ -350,7 +350,7 @@ def generate_custom_image_script(workspace_ids, workspace_config):
         if [ ! -f "Dockerfile" ]; then
             echo "Error: No Dockerfile found in the downloaded configuration"
             echo "Using default image instead: linuxserver/code-server:latest"
-            touch /workspaces/.use-default-image
+            touch /workspaces/.pod-config/.use-default-image
         fi
     """
 
@@ -375,16 +375,16 @@ if [ ! -z "$GITHUB_USERNAME" ]; then
 fi
 
 # Create Docker helper scripts for the user
-cat > /workspaces/docker-info.sh << 'EOF'
+cat > /workspaces/.pod-config/docker-info.sh << 'EOF'
 #!/bin/bash
 echo "Docker is available as a separate daemon inside this container."
 echo "The Docker daemon starts automatically and is ready to use."
 echo "You can verify it's working by running: docker info"
 EOF
-chmod +x /workspaces/docker-info.sh
+chmod +x /workspaces/.pod-config/docker-info.sh
 
 # Create a custom .bashrc extension with Docker information
-cat > /workspaces/.bash_docker << 'EOF'
+cat > /workspaces/.pod-config/.bash_docker << 'EOF'
 #!/bin/bash
 
 # Display Docker status on login
@@ -407,7 +407,7 @@ alias dps='docker ps'
 alias di='docker images'
 EOF
 
-      touch /workspaces/.code-server-initialized
+      touch /workspaces/.pod-config/.code-server-initialized
 
       # Initialize workspace
       echo "Workspace initialized successfully!"
@@ -424,17 +424,62 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
     
     # Add devcontainer processing
     repo_name = workspace_config['repo_name']
+    container_files = workspace_config['container_files']
+
+    devcontainer_b64 = container_files['devcontainer_json'] if container_files and container_files['devcontainer_json'] else ''
+    dockerfile_b64 = container_files['dockerfile'] if container_files and container_files['dockerfile'] else ''
+    docker_compose_b64 = container_files['docker_compose_yml'] if container_files and container_files['docker_compose_yml'] else ''
+    pm2_config_b64 = container_files['pm2_config_js'] if container_files and container_files['pm2_config_js'] else ''
     
     init_script += f"""
     # Create directory for wrapper Dockerfile and user Dockerfile
-    mkdir -p /workspaces/.code-server-wrapper
-    mkdir -p /workspaces/.user-dockerfile
-    cd /workspaces/.code-server-wrapper
+    mkdir -p /workspaces/.pod-config/.code-server-wrapper
+    mkdir -p /workspaces/.pod-config/.user-dockerfile
+    
+    cd /workspaces/.pod-config/.code-server-wrapper
     
     # Locate the user's Dockerfile in their repo
     USER_REPO_PATH="/workspaces/{repo_name}"
+
+    mkdir -p $USER_REPO_PATH/.devcontainer/
+
     DOCKERFILE_PATH="$USER_REPO_PATH/.devcontainer/Dockerfile"
     DEVCONTAINER_JSON_PATH="$USER_REPO_PATH/.devcontainer/devcontainer.json"
+    DOCKER_COMPOSE_PATH="$USER_REPO_PATH/.devcontainer/docker-compose.yml"
+    PM2_CONFIG_PATH="$USER_REPO_PATH/.devcontainer/pm2.config.js"
+
+    # Function to create file from base64 if it doesn't exist in repo
+    create_from_pool_config() {{
+        local file_path="$1"
+        local base64_content="$2"
+        local filename="$3"
+        
+        if [ ! -f "$file_path" ] && [ ! -z "$base64_content" ] && [ "$base64_content" != "None" ] && [ "$base64_content" != "null" ]; then
+            echo "Creating $filename from pool configuration..."
+            mkdir -p "$(dirname "$file_path")"
+            echo "$base64_content" | base64 -d > "$file_path"
+            if [ $? -eq 0 ]; then
+                echo "Successfully created $filename from pool config"
+            else
+                echo "Failed to decode base64 content for $filename"
+            fi
+        else
+            echo "Skipping $filename - file exists or no pool config provided"
+        fi
+        return 0
+    }}
+
+    # Check and create devcontainer.json from pool config if needed
+    create_from_pool_config "$DEVCONTAINER_JSON_PATH" "{devcontainer_b64}" "devcontainer.json"
+    
+    # Check and create Dockerfile from pool config if needed  
+    create_from_pool_config "$DOCKERFILE_PATH" "{dockerfile_b64}" "Dockerfile"
+    
+    # Check and create docker-compose.yml from pool config if needed
+    create_from_pool_config "$DOCKER_COMPOSE_PATH" "{docker_compose_b64}" "docker-compose.yml"
+    
+    # Check and create pm2.config.js from pool config if needed
+    create_from_pool_config "$PM2_CONFIG_PATH" "{pm2_config_b64}" "pm2.config.js"    
     
     # Debug info
     echo "DEBUG: Checking repository and Dockerfile"
@@ -490,14 +535,14 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
     if [ -f "$DOCKERFILE_PATH" ]; then
         echo "Found user Dockerfile at $DOCKERFILE_PATH"
         # Copy the user's Dockerfile
-        cp "$DOCKERFILE_PATH" /workspaces/.user-dockerfile/Dockerfile
+        cp "$DOCKERFILE_PATH" /workspaces/.pod-config/.user-dockerfile/Dockerfile
         
         # Process devcontainer.json if it exists
         if [ -f "$DEVCONTAINER_JSON_PATH" ]; then
             echo "Found devcontainer.json - processing configuration"
             
             # Copy the devcontainer.json file to the build context
-            cp "$DEVCONTAINER_JSON_PATH" /workspaces/.user-dockerfile/
+            cp "$DEVCONTAINER_JSON_PATH" /workspaces/.pod-config/.user-dockerfile/
             
             # Install jq if needed for JSON processing
             if ! command -v jq &> /dev/null; then
@@ -512,18 +557,18 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
         # Check if there's a docker-compose.yml file
         if [ -f "$USER_REPO_PATH/.devcontainer/docker-compose.yml" ]; then
             echo "Found docker-compose.yml - copying to build context"
-            cp "$USER_REPO_PATH/.devcontainer/docker-compose.yml" /workspaces/.user-dockerfile/
+            cp "$USER_REPO_PATH/.devcontainer/docker-compose.yml" /workspaces/.pod-config/.user-dockerfile/
         fi
         
         # Copy any other files in the .devcontainer directory
         if [ -d "$USER_REPO_PATH/.devcontainer" ]; then
             echo "Copying all files from .devcontainer directory"
-            cp -r "$USER_REPO_PATH/.devcontainer/"* /workspaces/.user-dockerfile/
+            cp -r "$USER_REPO_PATH/.devcontainer/"* /workspaces/.pod-config/.user-dockerfile/
         fi
     else
         echo "Warning: No Dockerfile found at $DOCKERFILE_PATH"
         echo "Using default Go dev container image instead"
-        echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.user-dockerfile/Dockerfile
+        echo "FROM mcr.microsoft.com/devcontainers/go:latest" > /workspaces/.pod-config/.user-dockerfile/Dockerfile
     fi
     
     # Create a wrapper Dockerfile that uses the user's image as a base
@@ -541,11 +586,11 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 EXPOSE 8444
 
 # Set up entrypoint to run code-server
-ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/install-features.sh ]; then /workspaces/install-features.sh; fi && if [ -f /workspaces/setup-env.sh ]; then source /workspaces/setup-env.sh; fi && if [ -f /workspaces/install-extensions.sh ]; then /workspaces/install-extensions.sh; fi && if [ -f /workspaces/run-lifecycle.sh ]; then /workspaces/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --disable-workspace-trust --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
+ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/.pod-config/install-features.sh ]; then /workspaces/.pod-config/install-features.sh; fi && if [ -f /workspaces/.pod-config/setup-env.sh ]; then source /workspaces/.pod-config/setup-env.sh; fi && if [ -f /workspaces/.pod-config/install-extensions.sh ]; then /workspaces/.pod-config/install-extensions.sh; fi && if [ -f /workspaces/.pod-config/run-lifecycle.sh ]; then /workspaces/.pod-config/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --disable-workspace-trust --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
 EOF
     
     # Create a flag file to indicate setup is done
-    touch /workspaces/.code-server-initialized
+    touch /workspaces/.pod-config/.code-server-initialized
     
     # Initialize workspace
     echo "Workspace initialization completed!"
@@ -567,7 +612,7 @@ def _generate_devcontainer_processing_script(repo_name):
             if [ ! -z "$EXTENSIONS" ]; then
                 echo "Found extensions in devcontainer.json:"
                 echo "$EXTENSIONS"
-                echo "$EXTENSIONS" > /workspaces/.extensions-list
+                echo "$EXTENSIONS" > /workspaces/.pod-config/.extensions-list
             else
                 echo "No extensions found in devcontainer.json or couldn't parse"
             fi
@@ -576,15 +621,15 @@ def _generate_devcontainer_processing_script(repo_name):
             SETTINGS=$(jq -r '.settings // .customizations.vscode.settings // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ ! -z "$SETTINGS" ]; then
                 echo "Found VS Code settings in devcontainer.json"
-                mkdir -p /workspaces/.vscode
-                echo "$SETTINGS" > /workspaces/.vscode/settings.json
+                mkdir -p /workspaces/.pod-config/.vscode
+                echo "$SETTINGS" > /workspaces/.pod-config/.vscode/settings.json
             fi
             
             # Extract features
             FEATURES=$(jq -r '.features // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ ! -z "$FEATURES" ]; then
                 echo "Found features in devcontainer.json:"
-                echo "$FEATURES" > /workspaces/.devcontainer-features
+                echo "$FEATURES" > /workspaces/.pod-config/.devcontainer-features
                 echo "Features will be installed during workspace initialization"
             fi
             
@@ -593,14 +638,14 @@ def _generate_devcontainer_processing_script(repo_name):
             if [ ! -z "$PORTS" ]; then
                 echo "Found ports to forward in devcontainer.json:"
                 echo "$PORTS"
-                echo "$PORTS" > /workspaces/.forward-ports
+                echo "$PORTS" > /workspaces/.pod-config/.forward-ports
             fi
             
             # Extract other customizations
             CUSTOMIZATIONS=$(jq -r '.customizations // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ ! -z "$CUSTOMIZATIONS" ]; then
                 echo "Found customizations in devcontainer.json"
-                echo "$CUSTOMIZATIONS" > /workspaces/.customizations
+                echo "$CUSTOMIZATIONS" > /workspaces/.pod-config/.customizations
             fi
             
             # Extract environment variables
@@ -608,7 +653,7 @@ def _generate_devcontainer_processing_script(repo_name):
             if [ ! -z "$ENV_VARS" ]; then
                 echo "Found environment variables in devcontainer.json:"
                 echo "$ENV_VARS"
-                echo "$ENV_VARS" > /workspaces/.container-env
+                echo "$ENV_VARS" > /workspaces/.pod-config/.container-env
             fi
             
             # Extract remote environment variables
@@ -616,7 +661,7 @@ def _generate_devcontainer_processing_script(repo_name):
             if [ ! -z "$REMOTE_ENV_VARS" ]; then
                 echo "Found remote environment variables in devcontainer.json:"
                 echo "$REMOTE_ENV_VARS"
-                echo "$REMOTE_ENV_VARS" > /workspaces/.remote-env
+                echo "$REMOTE_ENV_VARS" > /workspaces/.pod-config/.remote-env
             fi
             
             # Extract user configuration
@@ -628,12 +673,12 @@ def _generate_devcontainer_processing_script(repo_name):
                 
                 if [ ! -z "$REMOTE_USER" ]; then
                     echo "remoteUser: $REMOTE_USER"
-                    echo "REMOTE_USER=$REMOTE_USER" > /workspaces/.user-config
+                    echo "REMOTE_USER=$REMOTE_USER" > /workspaces/.pod-config/.user-config
                 fi
                 
                 if [ ! -z "$CONTAINER_USER" ]; then
                     echo "containerUser: $CONTAINER_USER"
-                    echo "CONTAINER_USER=$CONTAINER_USER" >> /workspaces/.user-config
+                    echo "CONTAINER_USER=$CONTAINER_USER" >> /workspaces/.pod-config/.user-config
                 fi
             fi
             
@@ -641,17 +686,17 @@ def _generate_devcontainer_processing_script(repo_name):
             POST_CREATE_CMD=$(jq -r '.postCreateCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ ! -z "$POST_CREATE_CMD" ]; then
                 echo "Found postCreateCommand in devcontainer.json"
-                echo "#!/bin/bash" > /workspaces/post-create-command.sh
-                echo "$POST_CREATE_CMD" >> /workspaces/post-create-command.sh
-                chmod +x /workspaces/post-create-command.sh
+                echo "#!/bin/bash" > /workspaces/.pod-config/post-create-command.sh
+                echo "$POST_CREATE_CMD" >> /workspaces/.pod-config/post-create-command.sh
+                chmod +x /workspaces/.pod-config/post-create-command.sh
             fi
             
             POST_START_CMD=$(jq -r '.postStartCommand // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
             if [ ! -z "$POST_START_CMD" ]; then
                 echo "Found postStartCommand in devcontainer.json"
-                echo "#!/bin/bash" > /workspaces/post-start-command.sh
-                echo "$POST_START_CMD" >> /workspaces/post-start-command.sh
-                chmod +x /workspaces/post-start-command.sh
+                echo "#!/bin/bash" > /workspaces/.pod-config/post-start-command.sh
+                echo "$POST_START_CMD" >> /workspaces/.pod-config/post-start-command.sh
+                chmod +x /workspaces/.pod-config/post-start-command.sh
             fi
 
             DOCKER_COMPOSE_FILE=$(jq -r '.dockerComposeFile // empty' "$DEVCONTAINER_JSON_PATH" 2>/dev/null)
@@ -664,9 +709,9 @@ def _generate_devcontainer_processing_script(repo_name):
                 echo "Workspace folder: $WORKSPACE_FOLDER"
                 
                 # Save docker-compose configuration
-                echo "{repo_name}/.devcontainer/$DOCKER_COMPOSE_FILE" > /workspaces/.docker-compose-file
-                [ ! -z "$SERVICE_NAME" ] && echo "$SERVICE_NAME" > /workspaces/.docker-compose-service
-                [ ! -z "$WORKSPACE_FOLDER" ] && echo "$WORKSPACE_FOLDER" > /workspaces/.docker-compose-workspace-folder
+                echo "{repo_name}/.devcontainer/$DOCKER_COMPOSE_FILE" > /workspaces/.pod-config/.docker-compose-file
+                [ ! -z "$SERVICE_NAME" ] && echo "$SERVICE_NAME" > /workspaces/.pod-config/.docker-compose-service
+                [ ! -z "$WORKSPACE_FOLDER" ] && echo "$WORKSPACE_FOLDER" > /workspaces/.pod-config/.docker-compose-workspace-folder
                 
                 echo "Docker Compose configuration will be started during workspace initialization"
             fi
@@ -689,9 +734,9 @@ else
   echo "No GITHUB_TOKEN found"
 fi
 
-COMPOSE_FILE_PATH="/workspaces/.docker-compose-file"
-SERVICE_FILE_PATH="/workspaces/.docker-compose-service"
-WORKSPACE_FOLDER_FILE="/workspaces/.docker-compose-workspace-folder"
+COMPOSE_FILE_PATH="/workspaces/.pod-config/.docker-compose-file"
+SERVICE_FILE_PATH="/workspaces/.pod-config/.docker-compose-service"
+WORKSPACE_FOLDER_FILE="/workspaces/.pod-config/.docker-compose-workspace-folder"
 
 if [ ! -f "$COMPOSE_FILE_PATH" ]; then
     echo "No docker-compose configuration found"
@@ -724,6 +769,10 @@ COMPOSE_FILE_FULL_PATH=""
 # Check in .devcontainer directory first
 if [ -f ".devcontainer/$DOCKER_COMPOSE_FILE" ]; then
     COMPOSE_FILE_FULL_PATH=".devcontainer/$DOCKER_COMPOSE_FILE"
+    cd /workspaces
+elif [ -f "/workspaces/.pod-config/.user-dockerfile/docker-compose.yml" ]; then
+    # Check if docker-compose was created from pool config
+    COMPOSE_FILE_FULL_PATH="/workspaces/.pod-config/.user-dockerfile/docker-compose.yml"
     cd /workspaces
 elif [ -f "$DOCKER_COMPOSE_FILE" ]; then
     COMPOSE_FILE_FULL_PATH="$DOCKER_COMPOSE_FILE"
@@ -780,7 +829,7 @@ if [ ! -z "$SERVICE_NAME" ]; then
     CONTAINER_ID=$(docker-compose -f "$COMPOSE_FILE_FULL_PATH" ps -q "$SERVICE_NAME")
     if [ ! -z "$CONTAINER_ID" ]; then
         echo "Service container ID: $CONTAINER_ID"
-        echo "$CONTAINER_ID" > /workspaces/.service-container-id
+        echo "$CONTAINER_ID" > /workspaces/.pod-config/.service-container-id
         
         # You could potentially exec into this container or forward ports
         echo "Service is accessible via container: $CONTAINER_ID"
@@ -795,14 +844,14 @@ echo "Docker Compose services status:"
 docker-compose -f "$COMPOSE_FILE_FULL_PATH" ps
 
 # Save the compose file path for later use
-echo "$COMPOSE_FILE_FULL_PATH" > /workspaces/.active-compose-file
-echo "$(pwd)" > /workspaces/.compose-working-directory
+echo "$COMPOSE_FILE_FULL_PATH" > /workspaces/.pod-config/.active-compose-file
+echo "$(pwd)" > /workspaces/.pod-config/.compose-working-directory
 
 echo "Docker Compose startup completed successfully"
 """,
         
         "extension_install_script": """#!/bin/bash
-EXTENSIONS_FILE="/workspaces/.extensions-list"
+EXTENSIONS_FILE="/workspaces/.pod-config/.extensions-list"
 
 if [ -f "$EXTENSIONS_FILE" ]; then
   echo "Installing extensions from devcontainer.json..."
@@ -817,7 +866,7 @@ if [ -f "$EXTENSIONS_FILE" ]; then
   mkdir -p /config/data/logs
   
   # Create cache directory for extensions
-  mkdir -p /workspaces/.vscode-extensions-cache
+  mkdir -p /workspaces/.pod-config/.vscode-extensions-cache
   
   # Function to install extension properly
   install_extension() {
@@ -828,7 +877,7 @@ if [ -f "$EXTENSIONS_FILE" ]; then
     if /usr/bin/code-server \
         --extensions-dir /config/extensions \
         --user-data-dir /config/data \
-        --install-extension "$extension" 2>&1 | tee -a /workspaces/extension-install.log; then
+        --install-extension "$extension" 2>&1 | tee -a /workspaces/.pod-config/extension-install.log; then
       echo "Successfully installed: $extension"
       return 0
     else
@@ -875,31 +924,31 @@ fi
         
         "env_setup_script": """#!/bin/bash
 # Apply container environment variables
-if [ -f "/workspaces/.container-env" ]; then
+if [ -f "/workspaces/.pod-config/.container-env" ]; then
   echo "Applying container environment variables"
   while IFS= read -r env_var; do
     if [ ! -z "$env_var" ]; then
       export "$env_var"
       echo "Exported: $env_var"
     fi
-  done < "/workspaces/.container-env"
+  done < "/workspaces/.pod-config/.container-env"
 fi
 
 # Apply remote environment variables
-if [ -f "/workspaces/.remote-env" ]; then
+if [ -f "/workspaces/.pod-config/.remote-env" ]; then
   echo "Applying remote environment variables"
   while IFS= read -r env_var; do
     if [ ! -z "$env_var" ]; then
       export "$env_var"
       echo "Exported: $env_var"
     fi
-  done < "/workspaces/.remote-env"
+  done < "/workspaces/.pod-config/.remote-env"
 fi
 
 # Apply user configuration
-if [ -f "/workspaces/.user-config" ]; then
+if [ -f "/workspaces/.pod-config/.user-config" ]; then
   echo "Applying user configuration from devcontainer.json"
-  source /workspaces/.user-config
+  source /workspaces/.pod-config/.user-config
   
   # Note: Full user switching would require more complex handling
   # This is just setting environment variables for reference
@@ -917,18 +966,18 @@ fi
 cd /workspaces
 
 # Set up VS Code settings if they exist
-if [ -f "/workspaces/.vscode/settings.json" ]; then
+if [ -f "/workspaces/.pod-config/.vscode/settings.json" ]; then
   echo "Applying VS Code settings..."
   mkdir -p /config/data/User
-  cp /workspaces/.vscode/settings.json /config/data/User/settings.json
+  cp /workspaces/.pod-config/.vscode/settings.json /config/data/User/settings.json
 fi
 
 # Handle port forwarding if configured
-if [ -f "/workspaces/.forward-ports" ]; then
+if [ -f "/workspaces/.pod-config/.forward-ports" ]; then
   echo "Setting up port forwarding..."
   # Note: The actual port forwarding is handled by the Kubernetes ingress
   # This is just for informational purposes
-  cat /workspaces/.forward-ports
+  cat /workspaces/.pod-config/.forward-ports
 fi
 """
     }

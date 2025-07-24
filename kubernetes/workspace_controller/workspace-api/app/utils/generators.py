@@ -80,5 +80,6 @@ def extract_workspace_config(data):
         'use_dev_container': use_dev_container,
         'github_token': github_token,
         'github_username': github_username,
-        'env_vars': env_vars
+        'env_vars': env_vars,
+        'container_files': data.get('container_files', None)
     }

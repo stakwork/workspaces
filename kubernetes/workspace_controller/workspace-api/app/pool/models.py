@@ -16,6 +16,10 @@ class PoolConfig:
     env_vars: List[Dict] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     owner_username: Optional[str] = None
+    devcontainer_json: Optional[str] = None  # base64 encoded
+    dockerfile: Optional[str] = None  # base64 encoded  
+    docker_compose_yml: Optional[str] = None  # base64 encoded
+    pm2_config_js: Optional[str] = None  # base64 encoded
 
     def _mask_value(self, value: str) -> str:
         """Mask sensitive value showing only first 2 and last 2 characters"""
@@ -63,7 +67,11 @@ class PoolConfig:
             'github_username': self.github_username,
             'env_vars': env_vars_output,
             'created_at': self.created_at.isoformat(),
-            'owner_username': self.owner_username
+            'owner_username': self.owner_username,
+            'devcontainer_json': self.devcontainer_json,
+            'dockerfile': self.dockerfile, 
+            'docker_compose_yml': self.docker_compose_yml,
+            'pm2_config_js': self.pm2_config_js
         }
     
     def to_json(self, mask_sensitive=True):

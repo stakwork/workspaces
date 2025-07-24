@@ -95,7 +95,9 @@ class PoolService:
     
     def create_pool(self, pool_name: str, minimum_vms: int, repo_name: str, 
                    branch_name: str, github_pat: str, github_username: str, 
-                   env_vars: List[Dict] = None, owner_username: str = None) -> Dict:
+                   env_vars: List[Dict] = None, owner_username: str = None,
+                   devcontainer_json: str = None, dockerfile: str = None,
+                   docker_compose_yml: str = None, pm2_config_js: str = None) -> Dict:
         """Create a new pool"""
         try:
             # Validate inputs
@@ -134,7 +136,11 @@ class PoolService:
                 branch_name=branch_name,
                 github_pat=actual_github_pat,
                 github_username=github_username,
-                env_vars=env_vars or []
+                env_vars=env_vars or [],
+                devcontainer_json=devcontainer_json,
+                dockerfile=dockerfile,
+                docker_compose_yml=docker_compose_yml,
+                pm2_config_js=pm2_config_js
             )
             
             # Store pool configuration in Kubernetes
@@ -209,6 +215,19 @@ class PoolService:
 
         try:
             pool_config = self.pools[pool_name]
+
+            if 'devcontainer_json' in update_data:
+                pool_config.devcontainer_json = update_data['devcontainer_json']
+
+            if 'dockerfile' in update_data:
+                pool_config.dockerfile = update_data['dockerfile']
+
+            if 'docker_compose_yml' in update_data:
+                pool_config.docker_compose_yml = update_data['docker_compose_yml']
+
+            if 'pm2_config_js' in update_data:
+                pool_config.pm2_config_js = update_data['pm2_config_js']
+
             
             # Update allowed fields
             if 'minimum_vms' in update_data:
@@ -680,6 +699,15 @@ class PoolService:
                         pool_data['github_username'] = None
                     if 'env_vars' not in pool_data:
                         pool_data['env_vars'] = []
+                    if 'devcontainer_json' not in pool_data:
+                        pool_data['devcontainer_json'] = None
+                    if 'dockerfile' not in pool_data:
+                        pool_data['dockerfile'] = None
+                    if 'docker_compose_yml' not in pool_data:
+                        pool_data['docker_compose_yml'] = None
+                    if 'pm2_config_js' not in pool_data:
+                        pool_data['pm2_config_js'] = None
+
 
                     pool_config = PoolConfig(
                         pool_name=pool_data['pool_name'],
@@ -689,6 +717,10 @@ class PoolService:
                         github_pat=pool_data['github_pat'],
                         github_username=pool_data['github_username'],
                         env_vars=pool_data['env_vars'],
+                        devcontainer_json=pool_data['devcontainer_json'],
+                        dockerfile=pool_data['dockerfile'],
+                        docker_compose_yml=pool_data['docker_compose_yml'],
+                        pm2_config_js=pool_data['pm2_config_js'],
                         created_at=datetime.fromisoformat(pool_data['created_at'])
                     )
 
@@ -717,6 +749,10 @@ class PoolService:
             'github_pat': pool_config.github_pat,  # In production, this should be stored in a Secret
             'github_username': pool_config.github_username,
             'env_vars': pool_config.env_vars,
+            'devcontainer_json': pool_config.devcontainer_json,
+            'dockerfile': pool_config.dockerfile,
+            'docker_compose_yml': pool_config.docker_compose_yml,
+            'pm2_config_js': pool_config.pm2_config_js,
             'created_at': pool_config.created_at.isoformat()
         }
         
@@ -1065,7 +1101,13 @@ class PoolService:
                             'githubUsername': pool_config.github_username,
                             'image': 'linuxserver/code-server:latest',
                             'useDevContainer': True,
-                            'env_vars': pool_config.env_vars
+                            'env_vars': pool_config.env_vars,
+                            'container_files': {
+                                'devcontainer_json': pool_config.devcontainer_json,
+                                'docker_compose_yml': pool_config.docker_compose_yml,
+                                'dockerfile': pool_config.dockerfile,
+                                'pm2_config_js': pool_config.pm2_config_js
+                            }
                         }
                         
                         result = workspace_service.create_workspace(workspace_request)
