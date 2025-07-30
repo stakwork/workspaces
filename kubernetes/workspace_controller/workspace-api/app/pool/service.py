@@ -230,6 +230,10 @@ class PoolService:
 
             
             # Update allowed fields
+            if 'branch_name' in update_data:
+                pool_config.branch_name = update_data['branch_name']
+            
+            # Update allowed fields
             if 'minimum_vms' in update_data:
                 if not isinstance(update_data['minimum_vms'], int) or update_data['minimum_vms'] < 1:
                     raise ValueError("minimum_vms must be a positive integer")
