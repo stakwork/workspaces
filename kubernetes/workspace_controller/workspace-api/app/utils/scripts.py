@@ -454,7 +454,7 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
         local base64_content="$2"
         local filename="$3"
         
-        if [ ! -f "$file_path" ] && [ ! -z "$base64_content" ] && [ "$base64_content" != "None" ] && [ "$base64_content" != "null" ]; then
+        if [ ! -z "$base64_content" ] && [ "$base64_content" != "None" ] && [ "$base64_content" != "null" ]; then
             echo "Creating $filename from pool configuration..."
             mkdir -p "$(dirname "$file_path")"
             echo "$base64_content" | base64 -d > "$file_path"
@@ -586,7 +586,7 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 EXPOSE 8444
 
 # Set up entrypoint to run code-server
-ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/.pod-config/install-features.sh ]; then /workspaces/.pod-config/install-features.sh; fi && if [ -f /workspaces/.pod-config/setup-env.sh ]; then source /workspaces/.pod-config/setup-env.sh; fi && if [ -f /workspaces/.pod-config/install-extensions.sh ]; then /workspaces/.pod-config/install-extensions.sh; fi && if [ -f /workspaces/.pod-config/run-lifecycle.sh ]; then /workspaces/.pod-config/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --disable-workspace-trust --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
+ENTRYPOINT ["/bin/bash", "-c", "if [ -f /workspaces/.pod-config/install-features.sh ]; then /workspaces/.pod-config/install-features.sh; fi && if [ -f /workspaces/.pod-config/setup-env.sh ]; then source /workspaces/.pod-config/setup-env.sh; fi && if [ -f /workspaces/.pod-config/install-extensions.sh ]; then /workspaces/.pod-config/install-extensions.sh; fi && if [ -f /workspaces/.pod-config/run-lifecycle.sh ]; then /workspaces/.pod-config/run-lifecycle.sh & fi && /usr/bin/code-server --bind-addr 0.0.0.0:8444 --auth password --disable-workspace-trust --disable-telemetry --user-data-dir /config/data --extensions-dir /config/extensions /workspaces"]
 EOF
     
     # Create a flag file to indicate setup is done
