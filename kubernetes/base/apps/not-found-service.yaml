@@ -1,0 +1,164 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subdomain-not-found
+  namespace: workspace-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: subdomain-not-found
+  template:
+    metadata:
+      labels:
+        app: subdomain-not-found
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        - name: html
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: config
+        configMap:
+          name: subdomain-not-found-config
+      - name: html
+        configMap:
+          name: subdomain-not-found-html
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: subdomain-not-found-config
+  namespace: workspace-system
+data:
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+    http {
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+        
+        server {
+            listen 80;
+            server_name _;
+            root /usr/share/nginx/html;
+            
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: subdomain-not-found-html
+  namespace: workspace-system
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Workspace Not Found</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 0;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .container {
+                background: white;
+                border-radius: 10px;
+                padding: 40px;
+                text-align: center;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+                max-width: 500px;
+                margin: 20px;
+            }
+            .error-code {
+                font-size: 72px;
+                font-weight: bold;
+                color: #e74c3c;
+                margin-bottom: 20px;
+            }
+            h1 {
+                color: #2c3e50;
+                margin-bottom: 20px;
+                font-size: 28px;
+            }
+            p {
+                color: #7f8c8d;
+                line-height: 1.6;
+                margin-bottom: 15px;
+            }
+            .reasons {
+                text-align: left;
+                background: #f8f9fa;
+                padding: 20px;
+                border-radius: 5px;
+                margin: 20px 0;
+            }
+            .reasons li {
+                margin-bottom: 8px;
+                color: #6c757d;
+            }
+            .back-button {
+                display: inline-block;
+                background: #3498db;
+                color: white;
+                padding: 12px 24px;
+                text-decoration: none;
+                border-radius: 5px;
+                margin-top: 20px;
+                transition: background 0.3s;
+            }
+            .back-button:hover {
+                background: #2980b9;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error-code">404</div>
+            <h1>Workspace Not Found</h1>
+            <p>The workspace you're looking for doesn't exist or is not available.</p>
+            
+            <div class="reasons">
+                <strong>This could be because:</strong>
+                <ul>
+                    <li>The workspace hasn't been created yet</li>
+                    <li>The workspace has been deleted or expired</li>
+                    <li>There's a typo in the URL</li>
+                    <li>The service on this port is not running</li>
+                </ul>
+            </div>
+        </div>
+    </body>
+    </html>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: subdomain-not-found
+  namespace: workspace-system
+spec:
+  selector:
+    app: subdomain-not-found
+  ports:
+  - port: 80
+    targetPort: 80
