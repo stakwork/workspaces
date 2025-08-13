@@ -32,6 +32,7 @@ spec:
             name: workspace-ui
             port:
               number: 80
+  # Catch-all wildcard rule that routes to 404 service
   - host: "*.${SUBDOMAIN_REPLACE_ME}"   # wildcard rule
     http:
       paths:
@@ -39,6 +40,6 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: workspace-ui
+            name: subdomain-not-found
             port:
               number: 80
