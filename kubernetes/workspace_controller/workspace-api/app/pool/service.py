@@ -214,24 +214,29 @@ class PoolService:
             raise ValueError(f"Access denied: User '{requesting_user}' does not own pool '{pool_name}'")
 
         try:
+            must_update = False
             pool_config = self.pools[pool_name]
 
             if 'devcontainer_json' in update_data:
                 pool_config.devcontainer_json = update_data['devcontainer_json']
+                must_update = True
 
             if 'dockerfile' in update_data:
                 pool_config.dockerfile = update_data['dockerfile']
+                must_update = True
 
             if 'docker_compose_yml' in update_data:
                 pool_config.docker_compose_yml = update_data['docker_compose_yml']
+                must_update = True
 
             if 'pm2_config_js' in update_data:
                 pool_config.pm2_config_js = update_data['pm2_config_js']
-
+                must_update = True
             
             # Update allowed fields
             if 'branch_name' in update_data:
                 pool_config.branch_name = update_data['branch_name']
+                must_update = True
             
             # Update allowed fields
             if 'minimum_vms' in update_data:
@@ -241,6 +246,7 @@ class PoolService:
             
             if 'github_username' in update_data:
                 pool_config.github_username = update_data['github_username']
+                must_update = True
 
             if 'github_pat' in update_data:
                 pat_data = update_data['github_pat']
@@ -258,17 +264,21 @@ class PoolService:
                             # Value unchanged, keep existing
                             pass  # Don't update github_pat
                         else:
+                            must_update = True
                             # Value was modified, use new value
                             pool_config.github_pat = pat_value
                     else:
+                        must_update = True
                         # New PAT or unmasked value
                         pool_config.github_pat = pat_value
                 elif isinstance(pat_data, str):
+                    must_update = True
                     # Legacy string format
                     pool_config.github_pat = pat_data
             
             # Handle environment variables with masking support
             if 'env_vars' in update_data:
+                must_update = True
                 new_env_vars = []
                 existing_env_vars = {env['name']: env['value'] for env in pool_config.env_vars}
                 
@@ -310,19 +320,178 @@ class PoolService:
             # Update stored configuration
             owner_username = self.pool_owners.get(pool_name)
             self._store_pool_config(pool_config, owner_username)
+
+            deleted_count = 0
+            flagged_count = 0
             
-            logger.info(f"Updated pool '{pool_name}' configuration")
+            # Only delete/flag workspaces if configuration that affects workspace content changed
+            if must_update:
+                deleted_count, flagged_count = self._handle_workspace_recreation(pool_name)
+            
+            message_parts = [f"Pool '{pool_name}' updated successfully"]
+            if must_update:
+                if deleted_count > 0:
+                    message_parts.append(f"{deleted_count} unused workspaces will be recreated")
+                if flagged_count > 0:
+                    message_parts.append(f"{flagged_count} used workspaces flagged for recreation when unused")
+            else:
+                message_parts.append("No workspace recreation needed")
+            
+            logger.info(f"Updated pool '{pool_name}' configuration. Config changed: {must_update}, Deleted: {deleted_count}, Flagged: {flagged_count}")
             
             return {
                 "success": True,
-                "message": f"Pool '{pool_name}' updated successfully",
+                "message": ". ".join(message_parts),
                 "pool": pool_config.to_dict(mask_sensitive=True),
-                "owner": owner_username
+                "owner": owner_username,
+                "config_changed": must_update,
+                "deleted_workspaces": deleted_count,
+                "flagged_workspaces": flagged_count
             }
+            
             
         except Exception as e:
             logger.error(f"Error updating pool '{pool_name}': {e}")
             raise Exception(f"Failed to update pool: {str(e)}")
+        
+    def _handle_workspace_recreation(self, pool_name: str) -> tuple[int, int]:
+        """Handle workspace recreation after pool config change"""
+        deleted_count = 0
+        flagged_count = 0
+        
+        try:
+            workspaces = self._get_pool_workspaces(pool_name)
+            
+            for workspace in workspaces:
+                usage_status = workspace.get('usage_status')
+                workspace_id = workspace.get('id')
+                
+                if not workspace_id:
+                    continue
+                    
+                if usage_status == 'unused':
+                    # Delete unused workspaces immediately
+                    try:
+                        logger.info(f"Deleting unused workspace {workspace_id} from pool {pool_name} for recreation")
+                        workspace_service.delete_workspace(workspace_id)
+                        deleted_count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to delete unused workspace {workspace_id}: {e}")
+                elif usage_status == 'used':
+                    # Flag used workspaces for deletion when they become unused
+                    try:
+                        namespace_name = f"workspace-{workspace_id}"
+                        self._flag_workspace_for_recreation(namespace_name)
+                        flagged_count += 1
+                        logger.info(f"Flagged used workspace {workspace_id} from pool {pool_name} for recreation when unused")
+                    except Exception as e:
+                        logger.error(f"Failed to flag workspace {workspace_id} for recreation: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error handling workspace recreation in pool {pool_name}: {e}")
+        
+        return deleted_count, flagged_count
+
+    def _flag_workspace_for_recreation(self, namespace_name: str):
+        """Flag a workspace for recreation when it becomes unused"""
+        try:
+            flag_data = {
+                'flagged_for_recreation': True,
+                'flagged_at': datetime.now().isoformat(),
+                'reason': 'pool_config_changed'
+            }
+            
+            config_map = client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(
+                    name="workspace-recreation-flag",
+                    namespace=namespace_name,
+                    labels={"app": "workspace-recreation-flag"}
+                ),
+                data={
+                    "flag.json": json.dumps(flag_data)
+                }
+            )
+            
+            try:
+                # Try to update first
+                self.core_v1.patch_namespaced_config_map(
+                    name="workspace-recreation-flag",
+                    namespace=namespace_name,
+                    body=config_map
+                )
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    # Create if it doesn't exist
+                    self.core_v1.create_namespaced_config_map(
+                        namespace=namespace_name,
+                        body=config_map
+                    )
+                else:
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"Error flagging workspace for recreation: {e}")
+            raise
+
+    def _is_workspace_flagged_for_recreation(self, namespace_name: str) -> bool:
+        """Check if a workspace is flagged for recreation"""
+        try:
+            config_map = self.core_v1.read_namespaced_config_map(
+                name="workspace-recreation-flag",
+                namespace=namespace_name
+            )
+            
+            flag_data = json.loads(config_map.data.get("flag.json", "{}"))
+            return flag_data.get('flagged_for_recreation', False)
+            
+        except client.rest.ApiException as e:
+            if e.status == 404:
+                # No flag ConfigMap means not flagged
+                return False
+            raise
+        except Exception as e:
+            logger.error(f"Error checking workspace recreation flag: {e}")
+            return False
+
+    def _remove_recreation_flag(self, namespace_name: str):
+        """Remove the recreation flag from a workspace"""
+        try:
+            self.core_v1.delete_namespaced_config_map(
+                name="workspace-recreation-flag",
+                namespace=namespace_name
+            )
+        except client.rest.ApiException as e:
+            if e.status != 404:  # Ignore if already deleted
+                raise
+        except Exception as e:
+            logger.error(f"Error removing recreation flag: {e}")
+
+        
+    def _delete_unused_workspaces(self, pool_name: str) -> int:
+        """Delete all unused workspaces in a pool so they get recreated"""
+        deleted_count = 0
+        
+        try:
+            workspaces = self._get_pool_workspaces(pool_name)
+            
+            for workspace in workspaces:
+                usage_status = workspace.get('usage_status')
+                workspace_id = workspace.get('id')
+                
+                # Only delete unused workspaces
+                if usage_status == 'unused' and workspace_id:
+                    try:
+                        logger.info(f"Deleting unused workspace {workspace_id} from pool {pool_name} for recreation")
+                        workspace_service.delete_workspace(workspace_id)
+                        deleted_count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to delete unused workspace {workspace_id}: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error deleting unused workspaces in pool {pool_name}: {e}")
+        
+        return deleted_count
+
     
     def list_pools(self) -> List[Dict]:
         """List all pools with their status"""
@@ -577,18 +746,44 @@ class PoolService:
                 raise
             
             # Update the workspace usage status
-            self._update_workspace_usage_status(namespace_name, 'unused')
+            flagged_for_recreation = self._is_workspace_flagged_for_recreation(namespace_name)
             
-            logger.info(f"Marked workspace '{workspace_id}' as unused in pool '{pool_name}'")
+            if flagged_for_recreation:
+                # Delete the workspace instead of just marking it unused
+                logger.info(f"Deleting workspace '{workspace_id}' as it was flagged for recreation due to pool config change")
+                
+                try:
+                    workspace_service.delete_workspace(workspace_id)
+                    logger.info(f"Successfully deleted flagged workspace '{workspace_id}' from pool '{pool_name}'")
+                    
+                    return {
+                        "success": True,
+                        "message": f"Workspace '{workspace_id}' deleted for recreation due to pool configuration changes",
+                        "workspace_id": workspace_id,
+                        "pool_name": pool_name,
+                        "pool_owner": self.pool_owners.get(pool_name),
+                        "action": "deleted_for_recreation"
+                    }
+                except Exception as e:
+                    logger.error(f"Failed to delete flagged workspace '{workspace_id}': {e}")
+                    # Fall back to marking as unused if deletion fails
+                    flagged_for_recreation = False
             
-            return {
-                "success": True,
-                "message": f"Workspace '{workspace_id}' marked as unused",
-                "workspace_id": workspace_id,
-                "pool_name": pool_name,
-                "pool_owner": self.pool_owners.get(pool_name),
-                "usage_status": "unused"
-            }
+            if not flagged_for_recreation:
+                # Update the workspace usage status normally
+                self._update_workspace_usage_status(namespace_name, 'unused')
+                
+                logger.info(f"Marked workspace '{workspace_id}' as unused in pool '{pool_name}'")
+                
+                return {
+                    "success": True,
+                    "message": f"Workspace '{workspace_id}' marked as unused",
+                    "workspace_id": workspace_id,
+                    "pool_name": pool_name,
+                    "pool_owner": self.pool_owners.get(pool_name),
+                    "usage_status": "unused",
+                    "action": "marked_unused"
+                }
             
         except Exception as e:
             logger.error(f"Error marking workspace '{workspace_id}' as unused: {e}")
@@ -846,13 +1041,16 @@ class PoolService:
                             pod = pods.items[0]
                             workspace_info["state"] = self._determine_pod_state(pod)
                         else:
-                            workspace_info["state"] = "creating"  # No pods yet, still being created
+                            workspace_info["state"] = "creating"
                         
                         # Get usage status
                         usage_info = self._get_workspace_usage_status(ns.metadata.name)
                         workspace_info["usage_status"] = usage_info.get('status', 'unused')
                         workspace_info["user_info"] = usage_info.get('user_info')
                         workspace_info["marked_at"] = usage_info.get('marked_at')
+                        
+                        # Check if flagged for recreation
+                        workspace_info["flagged_for_recreation"] = self._is_workspace_flagged_for_recreation(ns.metadata.name)
                         
                         workspaces.append(workspace_info)
                         
