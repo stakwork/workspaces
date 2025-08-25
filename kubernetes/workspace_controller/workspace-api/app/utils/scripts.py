@@ -185,6 +185,10 @@ def create_post_start_command():
                     sleep 2
                     rm -f /var/run/docker.pid
                     rm -f /var/run/docker.sock
+                    echo "Attempting to uninstall containerd and install Docker"
+                    sudo apt-get remove -y containerd
+                    sudo apt-get remove -y containerd.io
+                    sudo apt-get install -y docker.io
                     
                     start_docker_daemon
                     
