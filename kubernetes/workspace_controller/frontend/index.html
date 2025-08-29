@@ -76,7 +76,7 @@
         <!-- Pools Content -->
         <div id="poolsContent" class="hidden">
             <!-- Create Pool Form -->
-            <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+            <div class="bg-white p-6 rounded-lg shadow-md mb-8 hidden">
                 <h2 class="text-xl font-semibold mb-4">Create New Pool</h2>
                 <form id="createPoolForm">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -169,6 +169,14 @@
                 </form>
                 <div id="createPoolStatus" class="mt-4 hidden"></div>
             </div>
+
+            <!-- Cluster Capacity Info -->
+            <div id="capacityInfo" class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                <h3 class="text-lg font-semibold text-blue-800 mb-2">Cluster Capacity</h3>
+                <div id="capacityDetails" class="text-sm text-gray-600">
+                    <p>Loading capacity information...</p>
+                </div>
+            </div>
             
             <!-- Pools List -->
             <div class="bg-white p-6 rounded-lg shadow-md">
@@ -233,6 +241,120 @@
     let authToken = null;
     let currentUser = null;
     let currentTab = 'pools';
+
+    // Function to load cluster capacity
+    async function loadCapacity() {
+        try {
+            const response = await authenticatedFetch(`${API_BASE_URL}/workspaces/capacity`);
+            const data = await response.json();
+            
+            const capacityDetails = document.getElementById('capacityDetails');
+            
+            if (response.ok) {
+                const cluster = data.cluster_resources;
+                const workspace = data.workspace_capacity;
+                const requirements = data.per_workspace_requirements;
+                
+                // Determine status color based on capacity
+                let statusColor = 'text-green-600';
+                let statusText = 'Good capacity available';
+                
+                if (workspace.max_additional_workspaces <= 2) {
+                    statusColor = 'text-red-600';
+                    statusText = 'Low capacity - consider scaling cluster';
+                } else if (workspace.max_additional_workspaces <= 5) {
+                    statusColor = 'text-yellow-600';
+                    statusText = 'Moderate capacity available';
+                }
+                
+                capacityDetails.innerHTML = `
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="bg-white rounded p-3 border">
+                            <h4 class="font-semibold text-gray-700 mb-2">Resource Usage</h4>
+                            <div class="space-y-1">
+                                <div class="flex justify-between">
+                                    <span>CPU:</span>
+                                    <span>${cluster.used_cpu_cores.toFixed(1)} / ${cluster.total_cpu_cores.toFixed(1)} cores</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="bg-blue-600 h-2 rounded-full" style="width: ${(cluster.used_cpu_cores / cluster.total_cpu_cores * 100).toFixed(1)}%"></div>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Memory:</span>
+                                    <span>${cluster.used_memory_gb.toFixed(1)} / ${cluster.total_memory_gb.toFixed(1)} GB</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="bg-blue-600 h-2 rounded-full" style="width: ${(cluster.used_memory_gb / cluster.total_memory_gb * 100).toFixed(1)}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-white rounded p-3 border">
+                            <h4 class="font-semibold text-gray-700 mb-2">Workspace Capacity</h4>
+                            <div class="space-y-1">
+                                <div class="flex justify-between">
+                                    <span>Current Workspaces:</span>
+                                    <span class="font-medium">${workspace.current_workspaces}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Additional Capacity:</span>
+                                    <span class="font-medium ${statusColor}">${workspace.max_additional_workspaces}</span>
+                                </div>
+                                <div class="flex justify-between text-xs text-gray-500">
+                                    <span>Limited by:</span>
+                                    <span class="uppercase">${workspace.limited_by}</span>
+                                </div>
+                                <div class="${statusColor} text-xs font-medium mt-2">
+                                    ${statusText}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-white rounded p-3 border">
+                            <h4 class="font-semibold text-gray-700 mb-2">Per Workspace Requirements</h4>
+                            <div class="space-y-1">
+                                <div class="flex justify-between">
+                                    <span>CPU:</span>
+                                    <span>${requirements.cpu_cores} cores</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Memory:</span>
+                                    <span>${requirements.memory_gb} GB</span>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-2">
+                                    Available: ${cluster.available_cpu_cores.toFixed(1)} CPU, ${cluster.available_memory_gb.toFixed(1)}GB RAM
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-3 text-xs text-gray-500 flex justify-between items-center">
+                        <span>Last updated: ${new Date().toLocaleString()}</span>
+                        <button onclick="loadCapacity()" class="text-blue-600 hover:text-blue-800 underline">
+                            Refresh Capacity
+                        </button>
+                    </div>
+                `;
+            } else {
+                capacityDetails.innerHTML = `
+                    <p class="text-red-600">Failed to load capacity information: ${data.error || 'Unknown error'}</p>
+                    <button onclick="loadCapacity()" class="text-blue-600 hover:text-blue-800 underline text-sm mt-2">
+                        Retry
+                    </button>
+                `;
+            }
+        } catch (error) {
+            console.error('Error loading capacity:', error);
+            if (error.message !== 'Authentication required') {
+                document.getElementById('capacityDetails').innerHTML = `
+                    <p class="text-red-600">Failed to load capacity information.</p>
+                    <button onclick="loadCapacity()" class="text-blue-600 hover:text-blue-800 underline text-sm mt-2">
+                        Retry
+                    </button>
+                `;
+            }
+        }
+    }
 
     function encodePoolName(poolName) {
         return encodeURIComponent(poolName);
@@ -743,6 +865,8 @@
 
     // Function to load pools
     async function loadPools() {
+        loadCapacity();
+
         try {
             const response = await authenticatedFetch(`${API_BASE_URL}/pools`);
             const data = await response.json();
@@ -1269,6 +1393,10 @@
                                     </div>
                                     <div class="text-xs text-gray-500 mb-2">
                                         <a href="${workspace.url}" target="_blank" class="text-blue-500 hover:underline">Open Pod</a>
+                                        <br/>
+                                        <a href="https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/$252Faws$252Fcontainerinsights$252Fworkspace-cluster$252Fapplication$3FlogStreamNameFilter$3D${workspace.id}" target="_blank" class="text-blue-500 hover:underline">
+                                            See AWS Logs
+                                        </a>
                                     </div>
                                     <div class="text-xs text-gray-400 mb-2">Password: ${workspace.password}</div>
                                     ${workspace.marked_at ? `<div class="text-xs text-gray-400 mb-2">Marked: ${new Date(workspace.marked_at).toLocaleString()}</div>` : ''}

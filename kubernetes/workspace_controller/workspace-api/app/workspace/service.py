@@ -260,6 +260,250 @@ class WorkspaceService:
             workspace_info["useDevContainer"] = workspace_config['use_dev_container']
             
         return workspace_info
+    
+    def get_cluster_capacity(self):
+        """Get cluster capacity with comprehensive scheduling constraints"""
+        try:
+            from kubernetes import client
+            
+            # Get node information
+            nodes = self.core_v1.list_node()
+            
+            total_allocatable_cpu = 0
+            total_allocatable_memory = 0
+            node_details = []
+            
+            for node in nodes.items:
+                # Skip if node is not ready or has taints that prevent scheduling
+                is_ready = any(condition.type == "Ready" and condition.status == "True" 
+                            for condition in node.status.conditions)
+                
+                if not is_ready:
+                    continue
+                
+                # Check for taints that prevent scheduling
+                has_no_schedule_taint = False
+                if node.spec.taints:
+                    for taint in node.spec.taints:
+                        if taint.effect in ["NoSchedule", "NoExecute"]:
+                            has_no_schedule_taint = True
+                            break
+                
+                if has_no_schedule_taint:
+                    logger.info(f"Node {node.metadata.name} has NoSchedule/NoExecute taint, skipping")
+                    continue
+                    
+                # Get allocatable resources
+                if node.status.allocatable:
+                    cpu_str = node.status.allocatable.get('cpu', '0')
+                    memory_str = node.status.allocatable.get('memory', '0')
+                    
+                    if cpu_str.endswith('m'):
+                        cpu_cores = float(cpu_str[:-1]) / 1000
+                    else:
+                        cpu_cores = float(cpu_str)
+                        
+                    memory_bytes = self._parse_memory(memory_str)
+                    
+                    total_allocatable_cpu += cpu_cores
+                    total_allocatable_memory += memory_bytes
+                    
+                    node_details.append({
+                        'name': node.metadata.name,
+                        'allocatable_cpu': cpu_cores,
+                        'allocatable_memory': memory_bytes
+                    })
+            
+            # Get actual usage from metrics API
+            try:
+                custom_api = client.CustomObjectsApi()
+                
+                # Get node metrics
+                node_metrics = custom_api.list_cluster_custom_object(
+                    group="metrics.k8s.io",
+                    version="v1beta1",
+                    plural="nodes"
+                )
+                
+                # Map usage to nodes
+                node_usage = {}
+                for node_metric in node_metrics.get('items', []):
+                    node_name = node_metric.get('metadata', {}).get('name', '')
+                    usage = node_metric.get('usage', {})
+                    
+                    cpu_usage = usage.get('cpu', '0')
+                    memory_usage = usage.get('memory', '0')
+                    
+                    # Parse CPU usage
+                    if cpu_usage.endswith('n'):
+                        cpu_cores = float(cpu_usage[:-1]) / 1_000_000_000
+                    elif cpu_usage.endswith('m'):
+                        cpu_cores = float(cpu_usage[:-1]) / 1000
+                    else:
+                        cpu_cores = float(cpu_usage)
+                    
+                    memory_bytes = self._parse_memory(memory_usage)
+                    
+                    node_usage[node_name] = {
+                        'cpu': cpu_cores,
+                        'memory': memory_bytes
+                    }
+                
+            except Exception as metrics_error:
+                logger.error(f"Failed to get metrics: {metrics_error}")
+                raise Exception(f"Metrics API error: {metrics_error}")
+            
+            # Calculate per-node available capacity and see if any node can fit a new workspace
+            workspace_cpu_requirement = 2.0  # 2 CPU cores
+            workspace_memory_requirement = 8 * 1024 * 1024 * 1024  # 8GB
+            
+            nodes_that_can_fit_workspace = 0
+            total_used_cpu = 0
+            total_used_memory = 0
+            
+            logger.info("Per-node capacity analysis:")
+            
+            for node_detail in node_details:
+                node_name = node_detail['name']
+                allocatable_cpu = node_detail['allocatable_cpu']
+                allocatable_memory = node_detail['allocatable_memory']
+                
+                # Get usage for this node
+                usage = node_usage.get(node_name, {'cpu': 0, 'memory': 0})
+                used_cpu = usage['cpu']
+                used_memory = usage['memory']
+                
+                total_used_cpu += used_cpu
+                total_used_memory += used_memory
+                
+                # Calculate available on this specific node
+                # Use a more aggressive buffer per node (20% instead of 10%)
+                node_buffer_cpu = allocatable_cpu * 0.2
+                node_buffer_memory = allocatable_memory * 0.2
+                
+                available_cpu = allocatable_cpu - used_cpu - node_buffer_cpu
+                available_memory = allocatable_memory - used_memory - node_buffer_memory
+                
+                can_fit_workspace = (available_cpu >= workspace_cpu_requirement and 
+                                available_memory >= workspace_memory_requirement)
+                
+                if can_fit_workspace:
+                    nodes_that_can_fit_workspace += 1
+                
+                logger.info(f"  {node_name}:")
+                logger.info(f"    Allocatable: {allocatable_cpu:.1f} CPU, {allocatable_memory/(1024**3):.1f}GB")
+                logger.info(f"    Used: {used_cpu:.1f} CPU, {used_memory/(1024**3):.1f}GB")
+                logger.info(f"    Available: {available_cpu:.1f} CPU, {available_memory/(1024**3):.1f}GB")
+                logger.info(f"    Can fit workspace: {can_fit_workspace}")
+            
+            # Also check for resource quotas and limit ranges that might block scheduling
+            resource_constraints = []
+            
+            try:
+                # Check if there are any resource quotas that might be limiting
+                all_namespaces = self.core_v1.list_namespace()
+                for ns in all_namespaces.items:
+                    try:
+                        quotas = self.core_v1.list_namespaced_resource_quota(ns.metadata.name)
+                        if quotas.items:
+                            resource_constraints.append(f"ResourceQuotas in {ns.metadata.name}")
+                            
+                        limit_ranges = self.core_v1.list_namespaced_limit_range(ns.metadata.name)
+                        if limit_ranges.items:
+                            resource_constraints.append(f"LimitRanges in {ns.metadata.name}")
+                    except:
+                        pass
+            except Exception as e:
+                logger.warning(f"Could not check resource constraints: {e}")
+            
+            # Check for pod disruption budgets
+            try:
+                policy_v1 = client.PolicyV1Api()
+                pdbs = policy_v1.list_pod_disruption_budget_for_all_namespaces()
+                if pdbs.items:
+                    resource_constraints.append(f"PodDisruptionBudgets ({len(pdbs.items)} found)")
+            except:
+                pass
+            
+            # Count current workspaces
+            current_workspaces = 0
+            try:
+                workspace_namespaces = self.core_v1.list_namespace(label_selector="app=workspace")
+                for ns in workspace_namespaces.items:
+                    try:
+                        pods = self.core_v1.list_namespaced_pod(
+                            ns.metadata.name, 
+                            label_selector="app=code-server"
+                        )
+                        for pod in pods.items:
+                            if pod.status.phase == "Running":
+                                current_workspaces += 1
+                    except Exception as e:
+                        logger.warning(f"Error counting workspaces in {ns.metadata.name}: {e}")
+            except Exception as e:
+                logger.warning(f"Error listing workspace namespaces: {e}")
+            
+            # The real capacity is limited by how many nodes can actually fit a workspace
+            # Not just the total cluster resources
+            additional_capacity = nodes_that_can_fit_workspace
+            
+            # Conservative total available calculation
+            conservative_available_cpu = total_allocatable_cpu - total_used_cpu - (total_allocatable_cpu * 0.2)
+            conservative_available_memory = total_allocatable_memory - total_used_memory - (total_allocatable_memory * 0.2)
+            
+            result = {
+                "cluster_resources": {
+                    "total_cpu_cores": round(total_allocatable_cpu, 2),
+                    "total_memory_gb": round(total_allocatable_memory / (1024**3), 2),
+                    "used_cpu_cores": round(total_used_cpu, 2),
+                    "used_memory_gb": round(total_used_memory / (1024**3), 2),
+                    "available_cpu_cores": round(conservative_available_cpu, 2),
+                    "available_memory_gb": round(conservative_available_memory / (1024**3), 2)
+                },
+                "workspace_capacity": {
+                    "current_workspaces": current_workspaces,
+                    "max_additional_workspaces": additional_capacity,
+                    "limited_by": "node_capacity",
+                    "nodes_that_can_fit_workspace": nodes_that_can_fit_workspace
+                },
+                "per_workspace_requirements": {
+                    "cpu_cores": 2,
+                    "memory_gb": 8
+                },
+                "scheduling_constraints": resource_constraints,
+                "node_count": len(node_details)
+            }
+            
+            logger.info(f"Final capacity assessment: {additional_capacity} additional workspaces possible")
+            logger.info(f"Scheduling constraints found: {resource_constraints}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting cluster capacity: {e}")
+            raise Exception(f"Failed to get cluster capacity: {str(e)}")    
+
+    def _parse_memory(self, memory_str):
+        """Parse Kubernetes memory string (e.g., '7901Mi', '8Gi') to bytes"""
+        if not memory_str:
+            return 0
+            
+        memory_str = memory_str.strip()
+        
+        # Handle different units
+        if memory_str.endswith('Ki'):
+            return int(memory_str[:-2]) * 1024
+        elif memory_str.endswith('Mi'):
+            return int(memory_str[:-2]) * 1024 * 1024
+        elif memory_str.endswith('Gi'):
+            return int(memory_str[:-2]) * 1024 * 1024 * 1024
+        elif memory_str.endswith('Ti'):
+            return int(memory_str[:-2]) * 1024 * 1024 * 1024 * 1024
+        elif memory_str.endswith('m'):
+            return int(memory_str[:-1]) / 1000  # millibytes
+        else:
+            # Assume bytes
+            return int(memory_str)
 
 
 # Global service instance

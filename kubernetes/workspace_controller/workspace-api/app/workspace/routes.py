@@ -261,6 +261,16 @@ def get_workspace_status(current_user, workspace_id):
         logger.error(f"Error in get_workspace_status: {e}")
         return jsonify({"error": str(e)}), 500
 
+@workspace_bp.route('/capacity', methods=['GET'])
+@token_required
+def get_cluster_capacity(current_user):
+    """Get cluster capacity and workspace limits"""
+    try:
+        capacity_info = workspace_service.get_cluster_capacity()
+        return jsonify(capacity_info)
+    except Exception as e:
+        logger.error(f"Error in get_cluster_capacity: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @workspace_bp.route('/<workspace_id>/restart', methods=['POST'])
 @token_required

@@ -1282,7 +1282,7 @@ class PoolService:
             # Calculate how many VMs we need to create
             # We only count running and pending VMs towards the minimum
             active_vms = status.running_vms + status.pending_vms
-            needed_vms = max(0, status.minimum_vms - active_vms)
+            needed_vms = max(0, status.minimum_vms - active_vms - status.failed_vms)
             
             logger.info(f"Pool '{pool_name}' scaling check: minimum={status.minimum_vms}, active={active_vms} (running={status.running_vms}, pending={status.pending_vms}), needed={needed_vms}")
             
