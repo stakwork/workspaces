@@ -564,6 +564,15 @@ def _create_code_server_container(workspace_ids, workspace_config):
         client.V1EnvVar(name="VSCODE_PROXY_URI", value=f"https://{workspace_ids['subdomain']}-{{{{port}}}}.{app_config.WORKSPACE_DOMAIN}/"),
         client.V1EnvVar(name="POD_URL", value=f"https://{workspace_ids['subdomain']}.{app_config.WORKSPACE_DOMAIN}/"),
         client.V1EnvVar(
+            name="CODE_SERVER_PASSWORD", 
+            value_from=client.V1EnvVarSource(
+                secret_key_ref=client.V1SecretKeySelector(
+                    name="workspace-secret",
+                    key="password"
+                )
+            )
+        ),
+        client.V1EnvVar(
             name="GITHUB_TOKEN",
             value_from=client.V1EnvVarSource(
                 secret_key_ref=client.V1SecretKeySelector(

@@ -171,12 +171,12 @@
             </div>
 
             <!-- Cluster Capacity Info -->
-            <div id="capacityInfo" class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+            <!-- <div id="capacityInfo" class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
                 <h3 class="text-lg font-semibold text-blue-800 mb-2">Cluster Capacity</h3>
                 <div id="capacityDetails" class="text-sm text-gray-600">
                     <p>Loading capacity information...</p>
                 </div>
-            </div>
+            </div> -->
             
             <!-- Pools List -->
             <div class="bg-white p-6 rounded-lg shadow-md">
@@ -865,7 +865,7 @@
 
     // Function to load pools
     async function loadPools() {
-        loadCapacity();
+        // loadCapacity();
 
         try {
             const response = await authenticatedFetch(`${API_BASE_URL}/pools`);
