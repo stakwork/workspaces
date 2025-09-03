@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from app.auth.decorators import token_required
 from app.workspace.service import workspace_service
+from app.utils.image_cache import image_cache_service
 
 logger = logging.getLogger(__name__)
 workspace_bp = Blueprint('workspace', __name__)
@@ -316,4 +317,48 @@ def restart_workspace(current_user, workspace_id):
         logger.error(f"Error in restart_workspace: {e}")
         if "not found" in str(e).lower():
             return jsonify({"error": str(e)}), 404
+        return jsonify({"error": str(e)}), 500
+
+
+@workspace_bp.route('/cache', methods=['GET'])
+@token_required
+def get_image_cache(current_user):
+    """Get all cached image information"""
+    try:
+        cache_data = image_cache_service.list_cached_images()
+        
+        # Add statistics
+        total_entries = len(cache_data)
+        cache_stats = {
+            "total_cached_images": total_entries,
+            "cache_entries": cache_data
+        }
+        
+        return jsonify(cache_stats)
+        
+    except Exception as e:
+        logger.error(f"Error in get_image_cache: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@workspace_bp.route('/cache', methods=['DELETE'])
+@token_required
+def clear_image_cache(current_user):
+    """Clear all cached images"""
+    try:
+        success = image_cache_service.clear_cache()
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Image cache cleared successfully"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to clear image cache"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error in clear_image_cache: {e}")
         return jsonify({"error": str(e)}), 500

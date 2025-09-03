@@ -574,9 +574,24 @@ def generate_comprehensive_init_script(workspace_ids, workspace_config, aws_acco
     fi
     
     # Create a wrapper Dockerfile that uses the user's image as a base
-    cat > Dockerfile << 'EOF'
-# This will be replaced with the tag for the user's custom image
+    # Check if we should use a cached wrapper image
+    if [ -f "/workspaces/.pod-config/.cached-wrapper-image" ]; then
+        echo "Wrapper cache hit - skipping wrapper build"
+        exit 0
+    else
+        # Always use the base image from this build (not cached base)
+        cat > Dockerfile << 'EOF'
+# Use the base image built in this workspace
 FROM {aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}
+EOF
+    fi
+    
+    # Copy repository data from the build image to use existing clone
+    # This avoids re-cloning the repo which may be private
+    cat >> Dockerfile << 'EOF'
+
+# Copy repository data from build image (avoiding re-clone)
+COPY --from={aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']} /workspaces /workspaces
 
 RUN git config --global --add safe.directory /workspaces && \
     git config --global --add safe.directory '*'

@@ -94,6 +94,14 @@ def create_init_script_configmap(workspace_ids, workspace_config):
         app_config.AWS_ACCOUNT_ID
     )
     
+    # Add cache info to init script if using cached wrapper image
+    if workspace_ids.get('wrapper_cache_hit', False):
+        init_script += f"""
+# Write cached wrapper image info
+echo "{workspace_ids['cached_wrapper_image']}" > /workspaces/.pod-config/.cached-wrapper-image
+echo "Wrapper cache hit: Using cached wrapper image"
+"""
+    
     # Generate helper scripts
     helper_scripts = generate_helper_scripts()
     
@@ -382,10 +390,15 @@ def create_deployment(workspace_ids, workspace_config):
 def _create_init_containers(workspace_ids, workspace_config):
     """Create the initialization containers for the deployment"""
     init_containers = [
-        _create_workspace_init_container(workspace_config),
-        _create_base_image_kaniko_container(workspace_ids),
-        _create_wrapper_kaniko_container(workspace_ids)
+        _create_workspace_init_container(workspace_config)
     ]
+    
+    # Always add base image build, but only add wrapper build if not cached
+    init_containers.append(_create_base_image_kaniko_container(workspace_ids))
+    
+    if not workspace_ids.get('wrapper_cache_hit', False):
+        init_containers.append(_create_wrapper_kaniko_container(workspace_ids))
+    
     return init_containers
 
 
@@ -547,6 +560,14 @@ def _create_port_detector_container():
 def _create_code_server_container(workspace_ids, workspace_config):
     """Create the main code-server container"""
     image_pull_policy = "Always"
+    
+    # Use cached wrapper image if available, otherwise build new one
+    if workspace_ids.get('wrapper_cache_hit', False):
+        container_image = workspace_ids['cached_wrapper_image']
+        logger.info(f"Using cached wrapper image: {container_image}")
+    else:
+        container_image = f"{app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}"
+        logger.info(f"Using newly built wrapper image: {container_image}")
 
     # Base environment variables
     base_env_vars = [
@@ -629,7 +650,7 @@ def _create_code_server_container(workspace_ids, workspace_config):
 
     return client.V1Container(
         name="code-server",
-        image=f"{app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}",
+        image=container_image,
         image_pull_policy=image_pull_policy,
         env=base_env_vars,  # Use the combined environment variables
         volume_mounts=_create_code_server_volume_mounts(workspace_config),
