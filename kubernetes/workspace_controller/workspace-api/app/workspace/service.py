@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from app.config import app_config
 from app.utils.generators import generate_workspace_identifiers, extract_workspace_config
+from app.utils.image_cache import image_cache_service
 from app.workspace import k8s_resources
 
 logger = logging.getLogger(__name__)
@@ -70,8 +71,20 @@ class WorkspaceService:
             # Extract and validate request data
             workspace_config = extract_workspace_config(request_data)
             
+            # Check for cached wrapper image
+            cached_wrapper_info = image_cache_service.get_cached_wrapper_image(workspace_config)
+            
             # Generate workspace identifiers
             workspace_ids = generate_workspace_identifiers(app_config.WORKSPACE_DOMAIN)
+            
+            # Add cache info to workspace_ids for use in resource creation
+            if cached_wrapper_info:
+                workspace_ids['cached_wrapper_image'] = cached_wrapper_info['wrapper_image_tag']
+                workspace_ids['wrapper_cache_hit'] = True
+                logger.info(f"Using cached wrapper image for workspace {workspace_ids['workspace_id']}")
+            else:
+                workspace_ids['wrapper_cache_hit'] = False
+                logger.info(f"No cached wrapper image found, will build new wrapper for workspace {workspace_ids['workspace_id']}")
             
             # Create all Kubernetes resources
             self._create_workspace_resources(workspace_ids, workspace_config)
@@ -235,6 +248,17 @@ class WorkspaceService:
         k8s_resources.create_ingress(workspace_ids)
 
         k8s_resources.create_warmer_job(workspace_ids)
+        
+        # Store cached wrapper image info if new wrapper was built
+        if not workspace_ids.get('wrapper_cache_hit', False):
+            base_image_tag = f"{app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-user-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}"
+            wrapper_image_tag = f"{app_config.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/workspace-images:custom-wrapper-{workspace_ids['namespace_name']}-{workspace_ids['build_timestamp']}"
+            
+            # Store cache entry asynchronously to avoid blocking workspace creation
+            try:
+                image_cache_service.store_cached_wrapper_image(workspace_config, wrapper_image_tag, base_image_tag)
+            except Exception as e:
+                logger.warning(f"Failed to store wrapper cache entry (non-blocking): {e}")
     
     def _get_workspace_info(self, workspace_ids, workspace_config):
         """Create the workspace information dictionary"""
