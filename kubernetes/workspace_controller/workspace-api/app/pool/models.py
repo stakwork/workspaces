@@ -20,6 +20,8 @@ class PoolConfig:
     dockerfile: Optional[str] = None  # base64 encoded  
     docker_compose_yml: Optional[str] = None  # base64 encoded
     pm2_config_js: Optional[str] = None  # base64 encoded
+    cpu: Optional[str] = "2"  # CPU allocation (sets both request and limit)
+    memory: Optional[str] = "8Gi"  # Memory allocation (sets both request and limit)
 
     def _mask_value(self, value: str) -> str:
         """Mask sensitive value showing only first 2 and last 2 characters"""
@@ -71,7 +73,9 @@ class PoolConfig:
             'devcontainer_json': self.devcontainer_json,
             'dockerfile': self.dockerfile, 
             'docker_compose_yml': self.docker_compose_yml,
-            'pm2_config_js': self.pm2_config_js
+            'pm2_config_js': self.pm2_config_js,
+            'cpu': self.cpu,
+            'memory': self.memory
         }
     
     def to_json(self, mask_sensitive=True):

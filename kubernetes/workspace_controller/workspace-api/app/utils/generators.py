@@ -68,6 +68,10 @@ def extract_workspace_config(data):
     # Get optional GitHub token
     github_token = data.get('githubToken', None)
     github_username = data.get('githubUsername', None)
+    
+    # Get resource configuration
+    cpu = data.get('cpu', '2')
+    memory = data.get('memory', '8Gi')
         
     return {
         'github_urls': github_urls,
@@ -81,5 +85,7 @@ def extract_workspace_config(data):
         'github_token': github_token,
         'github_username': github_username,
         'env_vars': env_vars,
-        'container_files': data.get('container_files', None)
+        'container_files': data.get('container_files', None),
+        'cpu': cpu,
+        'memory': memory
     }

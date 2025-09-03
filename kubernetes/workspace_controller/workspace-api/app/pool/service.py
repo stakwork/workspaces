@@ -97,7 +97,8 @@ class PoolService:
                    branch_name: str, github_pat: str, github_username: str, 
                    env_vars: List[Dict] = None, owner_username: str = None,
                    devcontainer_json: str = None, dockerfile: str = None,
-                   docker_compose_yml: str = None, pm2_config_js: str = None) -> Dict:
+                   docker_compose_yml: str = None, pm2_config_js: str = None,
+                   cpu: str = None, memory: str = None) -> Dict:
         """Create a new pool"""
         try:
             # Validate inputs
@@ -140,7 +141,9 @@ class PoolService:
                 devcontainer_json=devcontainer_json,
                 dockerfile=dockerfile,
                 docker_compose_yml=docker_compose_yml,
-                pm2_config_js=pm2_config_js
+                pm2_config_js=pm2_config_js,
+                cpu=cpu or "2",
+                memory=memory or "8Gi"
             )
             
             # Store pool configuration in Kubernetes
@@ -231,6 +234,14 @@ class PoolService:
 
             if 'pm2_config_js' in update_data:
                 pool_config.pm2_config_js = update_data['pm2_config_js']
+                must_update = True
+
+            if 'cpu' in update_data:
+                pool_config.cpu = update_data['cpu']
+                must_update = True
+
+            if 'memory' in update_data:
+                pool_config.memory = update_data['memory']
                 must_update = True
             
             # Update allowed fields
@@ -906,7 +917,10 @@ class PoolService:
                         pool_data['docker_compose_yml'] = None
                     if 'pm2_config_js' not in pool_data:
                         pool_data['pm2_config_js'] = None
-
+                    if 'cpu' not in pool_data:
+                        pool_data['cpu'] = "2"
+                    if 'memory' not in pool_data:
+                        pool_data['memory'] = "8Gi"
 
                     pool_config = PoolConfig(
                         pool_name=pool_data['pool_name'],
@@ -920,6 +934,8 @@ class PoolService:
                         dockerfile=pool_data['dockerfile'],
                         docker_compose_yml=pool_data['docker_compose_yml'],
                         pm2_config_js=pool_data['pm2_config_js'],
+                        cpu=pool_data['cpu'],
+                        memory=pool_data['memory'],
                         created_at=datetime.fromisoformat(pool_data['created_at'])
                     )
 
@@ -952,6 +968,8 @@ class PoolService:
             'dockerfile': pool_config.dockerfile,
             'docker_compose_yml': pool_config.docker_compose_yml,
             'pm2_config_js': pool_config.pm2_config_js,
+            'cpu': pool_config.cpu,
+            'memory': pool_config.memory,
             'created_at': pool_config.created_at.isoformat()
         }
         
@@ -1304,6 +1322,8 @@ class PoolService:
                             'image': 'linuxserver/code-server:latest',
                             'useDevContainer': True,
                             'env_vars': pool_config.env_vars,
+                            'cpu': pool_config.cpu,
+                            'memory': pool_config.memory,
                             'container_files': {
                                 'devcontainer_json': pool_config.devcontainer_json,
                                 'docker_compose_yml': pool_config.docker_compose_yml,

@@ -165,6 +165,10 @@ resource "aws_eks_cluster" "workspace_cluster" {
   role_arn = aws_iam_role.eks_cluster_role.arn
   version  = var.kubernetes_version
 
+  enabled_cluster_log_types = [
+    "scheduler"
+  ]
+
   vpc_config {
     subnet_ids              = aws_subnet.private[*].id
     endpoint_private_access = true
