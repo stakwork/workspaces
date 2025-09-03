@@ -236,12 +236,12 @@ class PoolService:
                 pool_config.pm2_config_js = update_data['pm2_config_js']
                 must_update = True
 
-            if 'cpu' in update_data:
-                pool_config.cpu = update_data['cpu']
+            if 'poolCpu' in update_data:
+                pool_config.cpu = update_data['poolCpu']
                 must_update = True
 
-            if 'memory' in update_data:
-                pool_config.memory = update_data['memory']
+            if 'poolMemory' in update_data:
+                pool_config.memory = update_data['poolMemory']
                 must_update = True
             
             # Update allowed fields

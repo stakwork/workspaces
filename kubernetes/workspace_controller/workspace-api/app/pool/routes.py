@@ -77,7 +77,9 @@ def create_pool(current_user):
             devcontainer_json=container_files.get('devcontainer.json'),
             dockerfile=container_files.get('Dockerfile'),
             docker_compose_yml=container_files.get('docker-compose.yml'),
-            pm2_config_js=container_files.get('pm2.config.js')
+            pm2_config_js=container_files.get('pm2.config.js'),
+            cpu=container_files.get('poolCpu'),
+            memory=container_files.get('poolMemory')
         )
         
         return jsonify(result), 201

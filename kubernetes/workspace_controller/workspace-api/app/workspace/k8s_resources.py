@@ -368,7 +368,8 @@ def create_deployment(workspace_ids, workspace_config):
                     containers=[code_server_container, port_detector_container],
                     volumes=volumes,
                     image_pull_secrets=[
-                        client.V1LocalObjectReference(name="registry-credentials")
+                        client.V1LocalObjectReference(name="registry-credentials"),
+                        client.V1LocalObjectReference(name="dockerhub-secret")
                     ]
                 )
             )
