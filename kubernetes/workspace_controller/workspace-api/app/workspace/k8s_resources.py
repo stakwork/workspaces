@@ -30,24 +30,24 @@ def create_namespace(workspace_ids):
     logger.info(f"Created namespace: {workspace_ids['namespace_name']}")
 
 
-def create_persistent_volume_claim(workspace_ids):
-    """Create PVC for workspace data"""
-    pvc = client.V1PersistentVolumeClaim(
-        metadata=client.V1ObjectMeta(
-            name="workspace-data",
-            namespace=workspace_ids['namespace_name'],
-            labels={"app": "workspace"}
-        ),
-        spec=client.V1PersistentVolumeClaimSpec(
-            access_modes=["ReadWriteMany"],
-            resources=client.V1ResourceRequirements(
-                requests={"storage": "10Gi"}
-            ),
-            storage_class_name="efs-sc"
-        )
-    )
-    app_config.core_v1.create_namespaced_persistent_volume_claim(workspace_ids['namespace_name'], pvc)
-    logger.info(f"Created PVC in namespace: {workspace_ids['namespace_name']}")
+# def create_persistent_volume_claim(workspace_ids):
+#     """Create PVC for workspace data"""
+#     pvc = client.V1PersistentVolumeClaim(
+#         metadata=client.V1ObjectMeta(
+#             name="workspace-data",
+#             namespace=workspace_ids['namespace_name'],
+#             labels={"app": "workspace"}
+#         ),
+#         spec=client.V1PersistentVolumeClaimSpec(
+#             access_modes=["ReadWriteMany"],
+#             resources=client.V1ResourceRequirements(
+#                 requests={"storage": "10Gi"}
+#             ),
+#             storage_class_name="efs-sc"
+#         )
+#     )
+#     app_config.core_v1.create_namespaced_persistent_volume_claim(workspace_ids['namespace_name'], pvc)
+#     logger.info(f"Created PVC in namespace: {workspace_ids['namespace_name']}")
 
 
 def create_workspace_secret(workspace_ids, workspace_config):
@@ -267,23 +267,23 @@ def copy_dockerhub_secret(workspace_ids):
         logger.error(f"Error copying dockerhub-secret: {e}")
 
 
-def create_pvc_for_registry(workspace_ids):
-    """Create PVC for local registry storage"""
-    pvc = client.V1PersistentVolumeClaim(
-        metadata=client.V1ObjectMeta(
-            name="registry-storage",
-            namespace=workspace_ids['namespace_name']
-        ),
-        spec=client.V1PersistentVolumeClaimSpec(
-            access_modes=["ReadWriteOnce"],
-            resources=client.V1ResourceRequirements(
-                requests={"storage": "5Gi"}
-            ),
-            storage_class_name="efs-sc"
-        )
-    )
-    app_config.core_v1.create_namespaced_persistent_volume_claim(workspace_ids['namespace_name'], pvc)
-    logger.info(f"Created registry storage PVC in namespace: {workspace_ids['namespace_name']}")
+# def create_pvc_for_registry(workspace_ids):
+#     """Create PVC for local registry storage"""
+#     pvc = client.V1PersistentVolumeClaim(
+#         metadata=client.V1ObjectMeta(
+#             name="registry-storage",
+#             namespace=workspace_ids['namespace_name']
+#         ),
+#         spec=client.V1PersistentVolumeClaimSpec(
+#             access_modes=["ReadWriteOnce"],
+#             resources=client.V1ResourceRequirements(
+#                 requests={"storage": "5Gi"}
+#             ),
+#             storage_class_name="efs-sc"
+#         )
+#     )
+#     app_config.core_v1.create_namespaced_persistent_volume_claim(workspace_ids['namespace_name'], pvc)
+#     logger.info(f"Created registry storage PVC in namespace: {workspace_ids['namespace_name']}")
 
 
 def create_service_account(workspace_namespace):
@@ -346,7 +346,7 @@ def create_registry_secret(workspace_ids):
 def create_deployment(workspace_ids, workspace_config):
     """Create deployment for the code-server"""
     # Create storage for local registry
-    create_pvc_for_registry(workspace_ids)
+    # create_pvc_for_registry(workspace_ids)  # Using EmptyDir instead
 
     # Define init containers
     init_containers = _create_init_containers(workspace_ids, workspace_config)
@@ -857,15 +857,11 @@ def _create_volumes(workspace_ids):
     return [
         client.V1Volume(
             name="workspace-data",
-            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                claim_name="workspace-data"
-            )
+            empty_dir=client.V1EmptyDirVolumeSource()
         ),
         client.V1Volume(
             name="registry-storage",
-            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                claim_name="registry-storage"
-            )
+            empty_dir=client.V1EmptyDirVolumeSource()
         ),
         client.V1Volume(
             name="init-script",

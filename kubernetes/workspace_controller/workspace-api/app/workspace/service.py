@@ -218,7 +218,7 @@ class WorkspaceService:
         k8s_resources.create_namespace(workspace_ids)
         
         # Create storage and credentials
-        k8s_resources.create_persistent_volume_claim(workspace_ids)
+        # k8s_resources.create_persistent_volume_claim(workspace_ids)  # Using EmptyDir instead
         k8s_resources.create_workspace_secret(workspace_ids, workspace_config)
         
         # Create initialization scripts
