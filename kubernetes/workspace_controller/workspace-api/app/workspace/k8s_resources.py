@@ -1,6 +1,7 @@
 import json
 import base64
 import time
+import random
 import logging
 from kubernetes import client
 from app.config import app_config
@@ -345,6 +346,11 @@ def create_registry_secret(workspace_ids):
 
 def create_deployment(workspace_ids, workspace_config):
     """Create deployment for the code-server"""
+    # Add random delay to stagger deployments and reduce EC2 instance pressure
+    delay = random.uniform(0, 30)
+    logger.info(f"Staggering deployment creation with {delay:.1f}s delay for namespace: {workspace_ids['namespace_name']}")
+    time.sleep(delay)
+    
     # Create storage for local registry
     # create_pvc_for_registry(workspace_ids)  # Using EmptyDir instead
 
