@@ -228,6 +228,7 @@ class WorkspaceService:
         # Copy required ConfigMaps and Secrets
         k8s_resources.copy_port_detector_configmap(workspace_ids)
         k8s_resources.copy_wildcard_certificate(workspace_ids)
+        k8s_resources.copy_dockerhub_secret(workspace_ids)
         
         # Create Kubernetes resources
         k8s_resources.create_deployment(workspace_ids, workspace_config)

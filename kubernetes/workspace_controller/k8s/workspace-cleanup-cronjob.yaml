@@ -12,6 +12,8 @@ spec:
       template:
         spec:
           serviceAccountName: workspace-controller
+          imagePullSecrets:
+          - name: dockerhub-secret
           containers:
           - name: cleanup
             image: python:3.9-slim

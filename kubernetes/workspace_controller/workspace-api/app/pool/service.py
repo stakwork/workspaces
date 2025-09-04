@@ -1274,7 +1274,7 @@ class PoolService:
         # Count workspaces by state and usage
         running_vms = len([w for w in workspaces if w.get('state') == 'running'])
         pending_vms = len([w for w in workspaces if w.get('state') in ['pending', 'creating', 'starting']])
-        failed_vms = len([w for w in workspaces if w.get('state') in ['failed', 'error']])
+        failed_vms = len([w for w in workspaces if w.get('state') in ['failed', 'error', 'crashing']])
         used_vms = len([w for w in workspaces if w.get('usage_status') == 'used' and w.get('state') == 'running'])
         unused_vms = len([w for w in workspaces if w.get('usage_status') != 'used' and w.get('state') == 'running'])
         

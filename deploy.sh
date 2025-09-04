@@ -133,6 +133,12 @@ else
   echo "✅ NGINX Ingress Controller already installed"
 fi
 
+kubectl create secret docker-registry dockerhub-secret \
+    --docker-server=docker.io \
+    --docker-username=${DOCKERHUB_USERNAME} \
+    --docker-password=${DOCKERHUB_TOKEN} \
+    --namespace=workspace-system --dry-run=client -o yaml | kubectl replace -f -
+
 # Step 12: Install AWS EFS CSI Driver
 echo "Step 12: Installing AWS EFS CSI Driver..."
 kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"

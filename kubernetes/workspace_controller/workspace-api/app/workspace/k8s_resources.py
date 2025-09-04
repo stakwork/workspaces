@@ -239,6 +239,34 @@ def copy_wildcard_certificate(workspace_ids):
         # Continue anyway, but log it - this might cause SSL errors
 
 
+def copy_dockerhub_secret(workspace_ids):
+    """Copy dockerhub-secret from workspace-system to the new namespace"""
+    try:
+        # Get the secret from workspace-system
+        dockerhub_secret = app_config.core_v1.read_namespaced_secret(
+            name="dockerhub-secret", 
+            namespace="workspace-system"
+        )
+        
+        # Create a new secret in the workspace namespace
+        new_secret = client.V1Secret(
+            metadata=client.V1ObjectMeta(
+                name="dockerhub-secret",
+                namespace=workspace_ids['namespace_name'],
+                labels={"app": "workspace"}
+            ),
+            data=dockerhub_secret.data,
+            type=dockerhub_secret.type
+        )
+        
+        # Create the secret in the new namespace
+        app_config.core_v1.create_namespaced_secret(workspace_ids['namespace_name'], new_secret)
+        logger.info(f"Copied dockerhub-secret to namespace: {workspace_ids['namespace_name']}")
+        
+    except Exception as e:
+        logger.error(f"Error copying dockerhub-secret: {e}")
+
+
 def create_pvc_for_registry(workspace_ids):
     """Create PVC for local registry storage"""
     pvc = client.V1PersistentVolumeClaim(
@@ -675,7 +703,7 @@ def create_smart_warmer_job(main_pod_name, workspace_ids):
                     containers=[
                         client.V1Container(
                             name="code-server-warmer",
-                            image="node:18-alpine",
+                            image="docker.io/library/node:18-alpine",
                             command=["/bin/sh", "-c"],
                             args=[f"""
                                 echo "⏳ Waiting for code-server to be ready..."
@@ -749,7 +777,27 @@ WARMER_EOF
                                         )
                                     )
                                 ),
-                                client.V1EnvVar(name="CODE_SERVER_URL", value=url)
+                                client.V1EnvVar(name="CODE_SERVER_URL", value=url),
+                                client.V1EnvVar(
+                                    name="DOCKER_USERNAME",
+                                    value_from=client.V1EnvVarSource(
+                                        secret_key_ref=client.V1SecretKeySelector(
+                                            name="dockerhub-secret",
+                                            key="username",
+                                            optional=True
+                                        )
+                                    )
+                                ),
+                                client.V1EnvVar(
+                                    name="DOCKER_PASSWORD",
+                                    value_from=client.V1EnvVarSource(
+                                        secret_key_ref=client.V1SecretKeySelector(
+                                            name="dockerhub-secret",
+                                            key="password",
+                                            optional=True
+                                        )
+                                    )
+                                )
                             ],
                             resources=client.V1ResourceRequirements(
                                 requests={"cpu": "50m", "memory": "150Mi"},
@@ -757,7 +805,10 @@ WARMER_EOF
                             )
                         )
                     ],
-                    restart_policy="Never"
+                    restart_policy="Never",
+                    image_pull_secrets=[
+                        client.V1LocalObjectReference(name="dockerhub-secret")
+                    ]
                 )
             ),
             backoff_limit=2,
