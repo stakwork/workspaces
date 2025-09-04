@@ -24,3 +24,15 @@ variable "domain_name" {
   description = "Domain name for workspaces"
   default     = "REPLACE_ME"
 }
+
+variable "dockerhub_username" {
+  description = "DockerHub username for ECR pull through cache"
+  type        = string
+  sensitive   = true
+}
+
+variable "dockerhub_access_token" {
+  description = "DockerHub access token for ECR pull through cache"
+  type        = string
+  sensitive   = true
+}

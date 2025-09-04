@@ -787,7 +787,60 @@ output "kubeconfig_command" {
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${aws_eks_cluster.workspace_cluster.name}"
 }
 
+# DockerHub Credentials for ECR Pull Through Cache
+resource "aws_secretsmanager_secret" "dockerhub_credentials" {
+  name        = "ecr-pullthroughcache/docker-hub"
+  description = "DockerHub credentials for ECR pull through cache"
+}
+
+resource "aws_secretsmanager_secret_version" "dockerhub_credentials" {
+  secret_id = aws_secretsmanager_secret.dockerhub_credentials.id
+  secret_string = jsonencode({
+    username    = var.dockerhub_username
+    accessToken = var.dockerhub_access_token
+  })
+}
+
+# ECR Pull Through Cache Rule for DockerHub
+resource "aws_ecr_pull_through_cache_rule" "dockerhub" {
+  ecr_repository_prefix = "docker-hub"
+  upstream_registry_url = "registry-1.docker.io"
+  credential_arn        = aws_secretsmanager_secret.dockerhub_credentials.arn
+}
+
+# Repository Creation Template for DockerHub cached images
+resource "aws_ecr_repository_creation_template" "dockerhub_template" {
+  prefix      = "docker-hub"
+  description = "DockerHub pull through cache template"
+  
+  image_tag_mutability = "MUTABLE"
+  
+  lifecycle_policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 10 images"
+      selection = {
+        tagStatus     = "untagged"
+        countType     = "imageCountMoreThan"
+        countNumber   = 10
+      }
+      action = {
+        type = "expire"
+      }
+    }]
+  })
+  
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
 output "efs_id" {
   description = "ID of the EFS filesystem"
   value       = aws_efs_file_system.workspace_efs.id
+}
+
+output "dockerhub_pull_through_cache_uri" {
+  description = "ECR pull through cache URI for DockerHub images"
+  value       = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/docker-hub"
 }
