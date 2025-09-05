@@ -17,6 +17,7 @@ spec:
           containers:
           - name: cleanup
             image: python:3.9-slim
+            imagePullPolicy: IfNotPresent
             command:
             - /bin/bash
             - -c

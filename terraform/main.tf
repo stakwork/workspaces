@@ -192,13 +192,13 @@ resource "aws_eks_node_group" "workspace_nodes" {
   node_group_name = "workspace-nodes"
   node_role_arn   = aws_iam_role.eks_node_role.arn
   subnet_ids      = aws_subnet.private[*].id
-  instance_types  = ["m6i.2xlarge"]
+  instance_types  = ["m5.2xlarge"]
   disk_size       = 80
 
   scaling_config {
-    desired_size = 5
+    desired_size = 10
     min_size     = 1
-    max_size     = 5
+    max_size     = 20
   }
 
   depends_on = [
@@ -209,6 +209,8 @@ resource "aws_eks_node_group" "workspace_nodes" {
 
   tags = {
     Name = "workspace-node-group"
+    "k8s.io/cluster-autoscaler/enabled" = "true"
+    "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
   }
 }
 
@@ -765,10 +767,71 @@ resource "aws_iam_role_policy_attachment" "cert_manager_dns01_attachment" {
   policy_arn = aws_iam_policy.cert_manager_route53.arn
 }
 
+# IAM Policy for Cluster Autoscaler
+resource "aws_iam_policy" "cluster_autoscaler" {
+  name        = "ClusterAutoscalerPolicy"
+  description = "Policy for cluster autoscaler to manage EC2 instances"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "autoscaling:DescribeAutoScalingGroups",
+          "autoscaling:DescribeAutoScalingInstances",
+          "autoscaling:DescribeLaunchConfigurations",
+          "autoscaling:DescribeScalingActivities",
+          "autoscaling:DescribeTags",
+          "autoscaling:SetDesiredCapacity",
+          "autoscaling:TerminateInstanceInAutoScalingGroup",
+          "ec2:DescribeInstanceTypes",
+          "ec2:DescribeLaunchTemplateVersions"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# IAM Role for Cluster Autoscaler using IRSA
+resource "aws_iam_role" "cluster_autoscaler_role" {
+  name = "cluster-autoscaler-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks.arn
+        }
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub": "system:serviceaccount:kube-system:cluster-autoscaler"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Attach the cluster autoscaler policy to the role
+resource "aws_iam_role_policy_attachment" "cluster_autoscaler_attachment" {
+  role       = aws_iam_role.cluster_autoscaler_role.name
+  policy_arn = aws_iam_policy.cluster_autoscaler.arn
+}
+
 # Output the role ARN so we can use it in kubectl commands
 output "efs_csi_driver_role_arn" {
   description = "ARN of the IAM role for EFS CSI Driver"
   value       = aws_iam_role.efs_csi_driver_role.arn
+}
+
+output "cluster_autoscaler_role_arn" {
+  description = "ARN of the IAM role for Cluster Autoscaler"
+  value       = aws_iam_role.cluster_autoscaler_role.arn
 }
 
 # Outputs

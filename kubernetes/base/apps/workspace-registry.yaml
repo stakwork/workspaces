@@ -34,6 +34,7 @@ spec:
       initContainers:
       - name: cert-generator
         image: bitnami/kubectl:latest
+        imagePullPolicy: IfNotPresent
         command:
         - /bin/sh
         - -c
@@ -86,6 +87,7 @@ spec:
       containers:
       - name: registry
         image: registry:2
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5000
         env:

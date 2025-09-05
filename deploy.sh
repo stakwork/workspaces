@@ -22,9 +22,10 @@ cd ..
 # Step 2: Get Terraform outputs
 echo "Step 2: Getting Terraform outputs..."
 EFS_ID=$(terraform -chdir=terraform output -raw efs_id)
+CLUSTER_AUTOSCALER_ROLE_ARN=$(terraform -chdir=terraform output -raw cluster_autoscaler_role_arn)
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 AWS_REGION=${AWS_REGION:-us-east-1}
-export AWS_ACCOUNT_ID AWS_REGION
+export AWS_ACCOUNT_ID AWS_REGION CLUSTER_AUTOSCALER_ROLE_ARN
 
 # Step 3: Configure kubectl for EKS
 echo "Step 3: Configuring kubectl..."
@@ -50,6 +51,12 @@ kubectl -n external-dns wait --for=condition=available deployment/external-dns -
 # Step 6b: Install cert-manager
 echo "Step 6b: Installing cert-manager..."
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
+
+# Step 6c: Install Cluster Autoscaler
+echo "Step 6c: Installing Cluster Autoscaler..."
+sed "s/CLUSTER_AUTOSCALER_ROLE_ARN_PLACEHOLDER/${CLUSTER_AUTOSCALER_ROLE_ARN//\//\\/}/g; s/CLUSTER_NAME_PLACEHOLDER/workspace-cluster/g; s/AWS_REGION_PLACEHOLDER/${AWS_REGION}/g" \
+  ./kubernetes/base/apps/cluster-autoscaler.yaml > ./kubernetes/base/apps/cluster-autoscaler-generated.yaml
+kubectl apply -f ./kubernetes/base/apps/cluster-autoscaler-generated.yaml
 
 # Step 7: Wait for cert-manager to be ready
 echo "⏳ Waiting for cert-manager to be ready..."
