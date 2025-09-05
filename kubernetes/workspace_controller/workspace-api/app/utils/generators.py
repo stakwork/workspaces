@@ -20,8 +20,9 @@ def generate_workspace_identifiers(workspace_domain):
     """Generate unique identifiers for the workspace"""
     build_timestamp = int(time.time())
     workspace_id = str(uuid.uuid4())[:8]
-    subdomain = generate_random_subdomain()
     namespace_name = f"workspace-{workspace_id}"
+    # Use namespace name as subdomain
+    subdomain = workspace_id
     fqdn = f"{subdomain}.{workspace_domain}"
     password = random_password()
     

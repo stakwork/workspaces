@@ -149,7 +149,16 @@ class WorkspaceService:
                 
             namespace_name = namespaces.items[0].metadata.name
             
+            # Log pod information before deletion
+            try:
+                pods = self.core_v1.list_namespaced_pod(namespace_name, label_selector="app=code-server")
+                for pod in pods.items:
+                    logger.info(f"DELETING POD: {pod.metadata.name} in namespace {namespace_name} (workspace_id: {workspace_id}, node: {pod.spec.node_name}, phase: {pod.status.phase})")
+            except Exception as e:
+                logger.warning(f"Could not list pods before deletion in namespace {namespace_name}: {e}")
+            
             # Delete the namespace (this will delete all resources in it)
+            logger.info(f"DELETING NAMESPACE: {namespace_name} (workspace_id: {workspace_id})")
             self.core_v1.delete_namespace(namespace_name)
             
             return {
@@ -198,6 +207,7 @@ class WorkspaceService:
             namespace_name = namespaces.items[0].metadata.name
             
             # Scale the deployment to 1
+            logger.info(f"STARTING WORKSPACE: scaling deployment to 1 replica in namespace {namespace_name} (workspace_id: {workspace_id})")
             self.apps_v1.patch_namespaced_deployment_scale(
                 name="code-server",
                 namespace=namespace_name,

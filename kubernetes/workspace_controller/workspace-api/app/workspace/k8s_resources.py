@@ -411,6 +411,7 @@ def create_deployment(workspace_ids, workspace_config):
     )
 
     app_config.apps_v1.create_namespaced_deployment(workspace_ids['namespace_name'], deployment)
+    logger.info(f"CREATING POD: code-server deployment in namespace {workspace_ids['namespace_name']} (workspace_id: {workspace_ids['workspace_id']}, subdomain: {workspace_ids['subdomain']})")
     logger.info(f"Created deployment in namespace: {workspace_ids['namespace_name']}")
 
 
