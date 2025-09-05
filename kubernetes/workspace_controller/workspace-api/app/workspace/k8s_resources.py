@@ -262,7 +262,26 @@ def copy_dockerhub_secret(workspace_ids):
         
         # Create the secret in the new namespace
         app_config.core_v1.create_namespaced_secret(workspace_ids['namespace_name'], new_secret)
-        logger.info(f"Copied dockerhub-secret to namespace: {workspace_ids['namespace_name']}")
+
+        dockerhub_secret = app_config.core_v1.read_namespaced_secret(
+            name="dockerhub-pod-secret", 
+            namespace="workspace-system"
+        )
+        
+        # Create a new secret in the workspace namespace
+        new_secret = client.V1Secret(
+            metadata=client.V1ObjectMeta(
+                name="dockerhub-pod-secret",
+                namespace=workspace_ids['namespace_name'],
+                labels={"app": "workspace"}
+            ),
+            data=dockerhub_secret.data,
+            type=dockerhub_secret.type
+        )
+
+        app_config.core_v1.create_namespaced_secret(workspace_ids['namespace_name'], new_secret)
+        
+        logger.info(f"Copied dockerhub-secrets to namespace: {workspace_ids['namespace_name']}")
         
     except Exception as e:
         logger.error(f"Error copying dockerhub-secret: {e}")
@@ -418,11 +437,87 @@ def create_deployment(workspace_ids, workspace_config):
 def _create_init_containers(workspace_ids, workspace_config):
     """Create the initialization containers for the deployment"""
     init_containers = [
+        _create_docker_auth_init_container(),
         _create_workspace_init_container(workspace_config),
         _create_base_image_kaniko_container(workspace_ids),
         _create_wrapper_kaniko_container(workspace_ids)
     ]
     return init_containers
+
+
+def _create_docker_auth_init_container():
+    """Create Docker authentication init container that runs before user gets access"""
+    return client.V1Container(
+        name="docker-auth",
+        image="docker:cli",
+        command=["/bin/sh", "-c"],
+        args=["""
+            echo "🔐 Configuring Docker authentication for workspace..."
+            
+            # Login to DockerHub if credentials are provided
+            echo "🔍 Checking for DockerHub credentials..."
+            echo "DOCKERHUB_USERNAME value: ${DOCKERHUB_USERNAME:-'(not set)'}"
+            echo "DOCKERHUB_TOKEN length: ${#DOCKERHUB_TOKEN}"
+            
+            if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+                echo "📝 Authenticating with DockerHub as user: $DOCKERHUB_USERNAME"
+                echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+                
+                # Authentication is now stored in Docker daemon's memory/cache
+                # The daemon will use these credentials for pulls automatically
+                
+                # SECURITY: Remove any credential files immediately after login
+                rm -f /root/.docker/config.json
+                rm -f ~/.docker/config.json
+                
+                # Clear environment variables containing credentials
+                unset DOCKERHUB_USERNAME
+                unset DOCKERHUB_TOKEN
+                
+                echo "✅ DockerHub authentication completed and credentials cleaned up"
+                echo "🔒 Docker daemon authenticated, credential files removed"
+            else
+                echo "⚠️  No DockerHub credentials provided, skipping authentication"
+            fi
+            
+            echo "🎯 Docker authentication setup complete"
+        """],
+        env=[
+            client.V1EnvVar(
+                name="DOCKERHUB_USERNAME",
+                value_from=client.V1EnvVarSource(
+                    secret_key_ref=client.V1SecretKeySelector(
+                        name="dockerhub-pod-secret",
+                        key="username",
+                        optional=True
+                    )
+                )
+            ),
+            client.V1EnvVar(
+                name="DOCKERHUB_TOKEN",
+                value_from=client.V1EnvVarSource(
+                    secret_key_ref=client.V1SecretKeySelector(
+                        name="dockerhub-pod-secret",
+                        key="password",
+                        optional=True
+                    )
+                )
+            ),
+            client.V1EnvVar(name="DOCKER_HOST", value="unix:///var/run/docker.sock")
+        ],
+        volume_mounts=[
+            client.V1VolumeMount(
+                name="docker-sock",
+                mount_path="/var/run/docker.sock"
+            )
+        ],
+        security_context=client.V1SecurityContext(
+            run_as_user=0,
+            capabilities=client.V1Capabilities(
+                add=["CHOWN", "FOWNER"]
+            )
+        )
+    )
 
 
 def _create_workspace_init_container(workspace_config):
@@ -498,7 +593,7 @@ def _create_workspace_init_container(workspace_config):
             client.V1VolumeMount(
                 name="docker-sock",
                 mount_path="/var/run/docker.sock"
-            )
+            ),
         ],
         env=base_env_vars
     )

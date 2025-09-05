@@ -137,7 +137,12 @@ kubectl create secret docker-registry dockerhub-secret \
     --docker-server=docker.io \
     --docker-username=${DOCKERHUB_USERNAME} \
     --docker-password=${DOCKERHUB_TOKEN} \
-    --namespace=workspace-system --dry-run=client -o yaml | kubectl replace -f -
+    --namespace=workspace-system
+
+kubectl create secret generic dockerhub-pod-secret \
+    --from-literal=username=${DOCKERHUB_USERNAME} \
+    --from-literal=password=${DOCKERHUB_POD_TOKEN} \
+    -n workspace-system
 
 # Step 12: Install AWS EFS CSI Driver
 echo "Step 12: Installing AWS EFS CSI Driver..."
