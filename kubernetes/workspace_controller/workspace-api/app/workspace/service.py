@@ -180,7 +180,16 @@ class WorkspaceService:
                 
             namespace_name = namespaces.items[0].metadata.name
             
+            # Log pod information before scaling down
+            try:
+                pods = self.core_v1.list_namespaced_pod(namespace_name, label_selector="app=code-server")
+                for pod in pods.items:
+                    logger.info(f"SCALING DOWN POD: {pod.metadata.name} in namespace {namespace_name} (workspace_id: {workspace_id}, node: {pod.spec.node_name}, phase: {pod.status.phase})")
+            except Exception as e:
+                logger.warning(f"Could not list pods before scaling down in namespace {namespace_name}: {e}")
+            
             # Scale the deployment to 0
+            logger.info(f"STOPPING WORKSPACE: scaling deployment to 0 replicas in namespace {namespace_name} (workspace_id: {workspace_id})")
             self.apps_v1.patch_namespaced_deployment_scale(
                 name="code-server",
                 namespace=namespace_name,

@@ -143,6 +143,15 @@ spec:
                                           if should_mark_unused:
                                               logger.info(f"Marking workspace {workspace_id} as unused: {reason}")
                                               
+                                              # Log pod information when marking as unused
+                                              try:
+                                                  pods = self.core_v1.list_namespaced_pod(namespace_name, label_selector="app=code-server")
+                                                  for pod in pods.items:
+                                                      node_name = pod.spec.node_name if pod.spec.node_name else "unknown"
+                                                      logger.info(f"MARKING POD AS UNUSED: {pod.metadata.name} in namespace {namespace_name} (workspace_id: {workspace_id}, node: {node_name}, phase: {pod.status.phase})")
+                                              except Exception as e:
+                                                  logger.warning(f"Could not list pods when marking as unused in namespace {namespace_name}: {e}")
+                                              
                                               # Mark as unused instead of deleting
                                               self._mark_workspace_unused(namespace_name, reason)
                                               
