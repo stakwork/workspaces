@@ -198,7 +198,11 @@ resource "aws_eks_node_group" "workspace_nodes" {
   scaling_config {
     desired_size = 10
     min_size     = 1
+<<<<<<< Updated upstream
     max_size     = 20
+=======
+    max_size     = 10
+>>>>>>> Stashed changes
   }
 
   depends_on = [
